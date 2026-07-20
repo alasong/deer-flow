@@ -19,7 +19,7 @@ log/*
 venv/
 
 # User config file
-config.yaml
+/config.yaml
 
 # Langgraph
 .langgraph_api

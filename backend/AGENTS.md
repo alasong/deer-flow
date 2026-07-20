@@ -76,6 +76,58 @@ When making code changes, you MUST update the relevant documentation:
 - Keep documentation synchronized with the codebase at all times
 - Ensure accuracy and timeliness of all documentation
 
+### 数据塑形层必须为纯函数（Pure Data-Shaping）
+
+数据转换逻辑必须与 IO 分离。每个模块的数据塑形层应写成纯函数（无状态、无 IO、无 import side effect），使得测试不需要 mock 图/数据库/event loop。
+
+```python
+# ❌ 混合：read + transform + write 在一个函数里
+def process_and_save(data: dict) -> None:
+    result = expensive_transform(data)  # 数据转换
+    save_to_db(result)                  # IO
+
+# ✅ 分离：纯函数只做转换，调用者管 IO
+def build_payload(data: dict) -> dict:  # 纯函数，无IO
+    return {"transformed": data.get("key"), "valid": True}
+
+# IO 层只调用纯函数
+payload = build_payload(raw_data)
+await save_to_db(payload)
+```
+
+参考实现：`subagents/step_events.py`（模块 docstring 明确写了 "Keeping it pure means it is unit-tested without spinning up a graph"）。
+
+### 跨语言数据边界必须有校验函数（Boundary Validation）
+
+每个持久化到 `additional_kwargs` 或跨语言（Python→TypeScript）传输的键，必须有对应的 `make_*` 函数，在生产者边界做严格校验：
+
+- 值不在白名单直接 `raise ValueError`（不让错误数据静默传播）
+- 大文本用 head + `\n...\n` + tail 截断，而非从头截断
+- 数据 schema 通过共享 JSON fixture 锁死前后端一致性
+
+参考实现：`subagents/status_contract.py`。
+
+### API 演进优先加字段，不扩展枚举（Additive Fields）
+
+向后兼容的第一选择是新增可选字段，不是扩展现有枚举值：
+
+- 旧消费者忽略未知字段，不中断
+- 历史数据通过 reader 端的 `legacy_normalization` 映射处理
+- **不修历史、不兼容旧版、不加新 enum** — 加可选字段就够了
+
+参考实现：`subagents/status_contract.py` 中 `subagent_stop_reason` 作为 additive 字段的设计，以及 `_LEGACY_STATUS_NORMALIZATION` 对历史数据 `max_turns_reached` 的读时映射。
+
+### 机制不重复原则（No Duplicate Mechanisms）
+**禁止同一评估/决策维度存在两套独立平行的实现。**
+
+新增任何"评估、决策、判断、检测"类功能前，必须执行以下检查：
+
+1. **拓扑检查** — 在代码库中搜索语义相似的现有入口点。若已有机制覆盖相同维度，必须复用或扩展，不得另起一套。
+2. **消费者证明** — 新增的 public 函数若返回非 None 值，必须至少有一个 production caller（测试不算）。产出无人消费的代码不允许合入。
+3. **轴重叠即合并** — 当两个模块评估同一组维度（如 Completeness/Correctness/Actionability）时，要么合并为一个，要么一个显式依赖另一个。不允许独立平行存在。
+
+**违反案例**：`DecisionFramework`（已于 2026-07 清理）的三个修饰函数零 production 消费者。
+
 ## Commands
 
 **Root directory** (for full application):
