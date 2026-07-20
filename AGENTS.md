@@ -127,6 +127,10 @@ Rule of thumb: **root `make` = the full application**; **`backend/Makefile` and 
 
 These apply repo-wide; module guides own the module-specific detail.
 
+- **Index-first reading** — before reading any source files, check `.fat/index/files.txt`
+  and `.fat/index/symbols.json` for a file map and symbol overview. Refresh them with
+  `/index-refresh --files --symbols` if they exist but are stale. Only fall back to
+  find/grep when the index is absent.
 - **Documentation update policy** — keep docs in sync with code: update `README.md` for
   user-facing changes and the relevant `AGENTS.md` for development/architecture changes in
   the same change set.
