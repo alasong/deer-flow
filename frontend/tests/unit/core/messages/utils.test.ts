@@ -769,4 +769,59 @@ describe("orphan tool messages", () => {
     expect(t1b).toBeDefined();
     expect(t1b?.type).toBe("tool");
   });
+
+  test("orphan tool message with all preceding messages hidden does not console.error", () => {
+    // When ALL non-tool messages are hidden (hide_from_ui, slash_skill_activation),
+    // groups is empty when the first tool message arrives. The fallback must handle
+    // this case instead of hitting console.error.
+    const messages = [
+      {
+        id: "h-1",
+        type: "human",
+        content: "<slash_skill_activation>skill</slash_skill_activation>",
+        additional_kwargs: {},
+      },
+      // Orphan tool: all preceding visible messages are hidden, so groups is empty
+      {
+        id: "t-1",
+        type: "tool",
+        name: "bash",
+        tool_call_id: "call-1",
+        content: "output",
+      },
+    ] as Message[];
+
+    const groups = getMessageGroups(messages);
+
+    // Must not crash: the tool message should be retrievable from a group
+    const allMessages = groups.flatMap((g) => g.messages);
+    const t1 = allMessages.find((m) => m.id === "t-1");
+    expect(t1).toBeDefined();
+    expect(t1?.type).toBe("tool");
+  });
+
+  test("orphan tool message with all messages hidden (hide_from_ui)", () => {
+    // Same as above but using hide_from_ui on the preceding human message
+    const messages = [
+      {
+        id: "h-1",
+        type: "human",
+        content: "hidden setup",
+        additional_kwargs: { hide_from_ui: true },
+      },
+      {
+        id: "t-1",
+        type: "tool",
+        name: "bash",
+        tool_call_id: "call-1",
+        content: "output",
+      },
+    ] as Message[];
+
+    const groups = getMessageGroups(messages);
+    const allMessages = groups.flatMap((g) => g.messages);
+    const t1 = allMessages.find((m) => m.id === "t-1");
+    expect(t1).toBeDefined();
+    expect(t1?.type).toBe("tool");
+  });
 });

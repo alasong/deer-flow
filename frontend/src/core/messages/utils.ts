@@ -92,13 +92,15 @@ export function getMessageGroups(messages: Message[]): MessageGroup[] {
           if (lastGroup) {
             lastGroup.messages.push(message);
           } else {
-            // groups is empty (shouldn't happen — the outer for loop is guarded
-            // by `messages.length === 0 -> return []`), but keep the diagnostic
-            // just in case.
-            console.error(
-              "Unexpected tool message with no preceding group",
-              message,
-            );
+            // groups is empty — all preceding messages were hidden by
+            // isHiddenFromUIMessage (hide_from_ui, slash_skill_activation, etc).
+            // Create a new processing group for the orphan tool message instead
+            // of dropping it, so the tool result remains visible in the UI.
+            groups.push({
+              id: message.id,
+              type: "assistant:processing",
+              messages: [message],
+            });
           }
         }
       }
