@@ -144,7 +144,7 @@ make stop       # Stop all services
 make install            # Install backend dependencies
 make dev                # Run Gateway API with reload (port 8001)
 make gateway            # Run Gateway API only (port 8001)
-make test               # Run all backend tests
+make test               # Run all backend tests  (pytest-xdist -n auto, 最大并发)
 make test-blocking-io   # Run strict Blockbuster runtime gate on tests/blocking_io/
 make lint               # Lint with ruff
 make format             # Format code with ruff
@@ -869,11 +869,11 @@ Both can be modified at runtime via Gateway API endpoints or `DeerFlowClient` me
 - If a module causes circular import issues in tests, add a `sys.modules` mock in `tests/conftest.py` (see existing example for `deerflow.subagents.executor`)
 
 ```bash
-# Run all tests
+# Run all tests (with pytest-xdist -n auto for maximum concurrency)
 make test
 
 # Run a specific test file
-PYTHONPATH=. uv run pytest tests/test_<feature>.py -v
+PYTHONPATH=. uv run pytest tests/test_<feature>.py -n auto -q
 ```
 
 ### Running the Full Application
