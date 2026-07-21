@@ -52,6 +52,10 @@ class Agent:
             self.created_at = now
         if not self.updated_at:
             self.updated_at = now
+        if isinstance(self.status, str):
+            self.status = AgentStatus(self.status)
+        if isinstance(self.access_level, str):
+            self.access_level = AgentAccessLevel(self.access_level)
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {

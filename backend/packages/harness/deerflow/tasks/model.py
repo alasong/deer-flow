@@ -49,6 +49,10 @@ class Task:
             self.created_at = now
         if not self.updated_at:
             self.updated_at = now
+        if isinstance(self.status, str):
+            self.status = TaskStatus(self.status)
+        if isinstance(self.priority, str):
+            self.priority = TaskPriority(self.priority)
 
     @property
     def is_terminal(self) -> bool:
