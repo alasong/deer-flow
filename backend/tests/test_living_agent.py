@@ -77,26 +77,31 @@ class TestLivingAgentService:
         assert task is not None
         assert task.status.value == "completed", f"Expected completed, got {task.status.value}"
 
-    def test_router_setup_integration(self):
-        """LivingAgentService stores should be usable by the agent_tasks router."""
+    def test_router_app_state_integration(self):
+        """LivingAgentService stores should be settable on app.state for DI."""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
         from app.gateway.routers import agent_tasks as at_module
         from app.gateway.living_agent import LivingAgentService
 
-        # Reset globals
-        at_module._registry = None
-        at_module._task_store = None
-        at_module._checkpointer = None
-        at_module._gate_store = None
-
         service = LivingAgentService()
-        at_module.setup(
-            registry=service.registry,
-            task_store=service.task_store,
-            checkpointer=service.checkpointer,
-            gate_store=service.gate_store,
-        )
+        app = FastAPI()
+        app.include_router(at_module.router)
+        app.state.agent_registry = service.registry
+        app.state.task_store = service.task_store
+        app.state.gate_store = service.gate_store
 
-        # Stores should be accessible via router
-        assert at_module._get_registry() is service.registry
-        assert at_module._get_task_store() is service.task_store
-        assert at_module._get_gate_store() is service.gate_store
+        client = TestClient(app)
+
+        # Verify endpoints work via app.state DI
+        resp = client.post("/api/agents/tasks", json={
+            "capability": "dev.code",
+            "description": "Test task",
+        })
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "pending"
+
+        # Verify stores are the same instances
+        assert app.state.agent_registry is service.registry
+        assert app.state.task_store is service.task_store
+        assert app.state.gate_store is service.gate_store

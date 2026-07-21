@@ -6,13 +6,10 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-from fastapi.testclient import TestClient
 from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
-from app.gateway.routers.agent_tasks import (
-    router,
-    setup as router_setup,
-)
+from app.gateway.routers import agent_tasks as at_module
 from deerflow.agents.model import Agent
 from deerflow.agents.registry import AgentRegistry
 from deerflow.runtime.checkpointer.task_checkpointer import TaskCheckpointer
@@ -25,28 +22,34 @@ from deerflow.tasks.store import TaskStore
 @pytest.fixture
 def app() -> FastAPI:
     app = FastAPI()
-    app.include_router(router)
+    app.include_router(at_module.router)
     return app
 
 
 @pytest.fixture
-def client(app: FastAPI) -> TestClient:
-    return TestClient(app)
-
-
-@pytest.fixture
-def stores() -> dict[str, Any]:
+def stores(app: FastAPI) -> dict[str, Any]:
+    """Set up stores on app.state."""
     registry = AgentRegistry()
     task_store = TaskStore()
     checkpointer = TaskCheckpointer(MagicMock())
     gate_store = HumanGateStore()
-    router_setup(registry, task_store, checkpointer, gate_store)
+
+    app.state.agent_registry = registry
+    app.state.task_store = task_store
+    app.state.checkpointer = checkpointer
+    app.state.gate_store = gate_store
+
     return {
         "registry": registry,
         "task_store": task_store,
         "checkpointer": checkpointer,
         "gate_store": gate_store,
     }
+
+
+@pytest.fixture
+def client(app: FastAPI) -> TestClient:
+    return TestClient(app)
 
 
 class TestAgentEndpoints:
@@ -203,15 +206,7 @@ class TestTaskEndpoints:
         assert resp.status_code == 404
 
     def test_not_configured(self):
-        """Without setup(), the router should return 503."""
-        from app.gateway.routers import agent_tasks as at_module
-
-        # Reset globals
-        at_module._registry = None
-        at_module._task_store = None
-        at_module._checkpointer = None
-        at_module._gate_store = None
-
+        """Without app.state stores, the router should return 503."""
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
 
@@ -316,11 +311,7 @@ class TestGateEndpoints:
         assert resp.status_code == 404
 
     def test_gate_not_configured(self):
-        """Without gate_store setup, gate endpoints should return 503."""
-        from app.gateway.routers import agent_tasks as at_module
-
-        at_module._gate_store = None
-
+        """Without gate_store on app.state, gate endpoints should return 503."""
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
 

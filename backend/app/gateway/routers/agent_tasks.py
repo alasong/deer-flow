@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from deerflow.agents.model import Agent as AgentModel
@@ -74,44 +74,29 @@ class AgentListResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Dependencies (injected via app state or global singletons)
+# Dependencies (stores injected via app.state)
 # ---------------------------------------------------------------------------
 
-_registry: AgentRegistry | None = None
-_task_store: TaskStore | None = None
-_checkpointer: TaskCheckpointer | None = None
-_gate_store: HumanGateStore | None = None
 
-
-def setup(
-    registry: AgentRegistry,
-    task_store: TaskStore,
-    checkpointer: TaskCheckpointer | None = None,
-    gate_store: HumanGateStore | None = None,
-) -> None:
-    global _registry, _task_store, _checkpointer, _gate_store
-    _registry = registry
-    _task_store = task_store
-    _checkpointer = checkpointer
-    _gate_store = gate_store
-
-
-def _get_registry() -> AgentRegistry:
-    if _registry is None:
+def get_registry(request: Request) -> AgentRegistry:
+    registry = getattr(request.app.state, "agent_registry", None)
+    if registry is None:
         raise HTTPException(status_code=503, detail="Agent registry not configured")
-    return _registry
+    return registry
 
 
-def _get_task_store() -> TaskStore:
-    if _task_store is None:
+def get_task_store(request: Request) -> TaskStore:
+    store = getattr(request.app.state, "task_store", None)
+    if store is None:
         raise HTTPException(status_code=503, detail="Task store not configured")
-    return _task_store
+    return store
 
 
-def _get_gate_store() -> HumanGateStore:
-    if _gate_store is None:
+def get_gate_store(request: Request) -> HumanGateStore:
+    store = getattr(request.app.state, "gate_store", None)
+    if store is None:
         raise HTTPException(status_code=503, detail="Gate store not configured")
-    return _gate_store
+    return store
 
 
 # ---------------------------------------------------------------------------
@@ -120,9 +105,8 @@ def _get_gate_store() -> HumanGateStore:
 
 
 @router.post("/agents", response_model=AgentResponse)
-def create_agent(req: AgentCreateRequest) -> AgentResponse:
+def create_agent(req: AgentCreateRequest, registry: AgentRegistry = Depends(get_registry)) -> AgentResponse:
     """Register a new agent."""
-    registry = _get_registry()
     existing = registry.get(req.agent_id)
     if existing:
         raise HTTPException(status_code=409, detail=f"Agent {req.agent_id!r} already exists")
@@ -138,9 +122,8 @@ def create_agent(req: AgentCreateRequest) -> AgentResponse:
 
 
 @router.get("/agents", response_model=AgentListResponse)
-def list_agents() -> AgentListResponse:
+def list_agents(registry: AgentRegistry = Depends(get_registry)) -> AgentListResponse:
     """List all registered agents."""
-    registry = _get_registry()
     agents = registry.list()
     return AgentListResponse(
         agents=[_agent_to_response(a) for a in agents],
@@ -149,9 +132,8 @@ def list_agents() -> AgentListResponse:
 
 
 @router.get("/agents/{agent_id}", response_model=AgentResponse)
-def get_agent(agent_id: str) -> AgentResponse:
+def get_agent(agent_id: str, registry: AgentRegistry = Depends(get_registry)) -> AgentResponse:
     """Get a specific agent."""
-    registry = _get_registry()
     agent = registry.get(agent_id)
     if agent is None:
         raise HTTPException(status_code=404, detail=f"Agent {agent_id!r} not found")
@@ -159,9 +141,8 @@ def get_agent(agent_id: str) -> AgentResponse:
 
 
 @router.delete("/agents/{agent_id}")
-def delete_agent(agent_id: str) -> dict[str, str]:
+def delete_agent(agent_id: str, registry: AgentRegistry = Depends(get_registry)) -> dict[str, str]:
     """Unregister an agent."""
-    registry = _get_registry()
     if not registry.unregister(agent_id):
         raise HTTPException(status_code=404, detail=f"Agent {agent_id!r} not found")
     return {"status": "deleted"}
@@ -173,9 +154,8 @@ def delete_agent(agent_id: str) -> dict[str, str]:
 
 
 @router.post("/tasks", response_model=TaskSubmitResponse)
-def submit_task(req: TaskSubmitRequest) -> TaskSubmitResponse:
+def submit_task(req: TaskSubmitRequest, store: TaskStore = Depends(get_task_store)) -> TaskSubmitResponse:
     """Submit a new task to the task queue."""
-    store = _get_task_store()
     import uuid
 
     task_id = f"task_{uuid.uuid4().hex[:12]}"
@@ -191,18 +171,19 @@ def submit_task(req: TaskSubmitRequest) -> TaskSubmitResponse:
 
 
 @router.get("/tasks", response_model=list[TaskStatusResponse])
-def list_tasks(status: str | None = None) -> list[TaskStatusResponse]:
+def list_tasks(
+    status: str | None = None,
+    store: TaskStore = Depends(get_task_store),
+) -> list[TaskStatusResponse]:
     """List tasks, optionally filtered by status."""
-    store = _get_task_store()
     status_filter = TaskStatus(status) if status else None
     tasks = store.list(status=status_filter)
     return [_task_to_response(t) for t in tasks]
 
 
 @router.get("/tasks/{task_id}", response_model=TaskStatusResponse)
-def get_task(task_id: str) -> TaskStatusResponse:
+def get_task(task_id: str, store: TaskStore = Depends(get_task_store)) -> TaskStatusResponse:
     """Get task status and result."""
-    store = _get_task_store()
     task = store.get(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail=f"Task {task_id!r} not found")
@@ -210,9 +191,12 @@ def get_task(task_id: str) -> TaskStatusResponse:
 
 
 @router.post("/tasks/{task_id}/claim", response_model=TaskStatusResponse)
-def claim_task(task_id: str, req: TaskClaimRequest) -> TaskStatusResponse:
+def claim_task(
+    task_id: str,
+    req: TaskClaimRequest,
+    store: TaskStore = Depends(get_task_store),
+) -> TaskStatusResponse:
     """Claim a pending task for execution."""
-    store = _get_task_store()
     try:
         task = store.claim(task_id, req.agent_id)
     except KeyError:
@@ -223,9 +207,8 @@ def claim_task(task_id: str, req: TaskClaimRequest) -> TaskStatusResponse:
 
 
 @router.post("/tasks/{task_id}/cancel", response_model=TaskStatusResponse)
-def cancel_task(task_id: str) -> TaskStatusResponse:
+def cancel_task(task_id: str, store: TaskStore = Depends(get_task_store)) -> TaskStatusResponse:
     """Cancel a pending or claimed task."""
-    store = _get_task_store()
     try:
         task = store.cancel(task_id)
     except KeyError:
@@ -277,9 +260,12 @@ def _gate_to_response(gate: HumanGate) -> GateResponse:
 
 
 @router.get("/gates", response_model=GateListResponse)
-def list_gates(status: str | None = None, task_id: str | None = None) -> GateListResponse:
+def list_gates(
+    status: str | None = None,
+    task_id: str | None = None,
+    gate_store: HumanGateStore = Depends(get_gate_store),
+) -> GateListResponse:
     """List human gates, optionally filtered by status or task_id."""
-    gate_store = _get_gate_store()
     status_filter = GateStatus(status) if status else None
     gates = gate_store.list(status=status_filter, task_id=task_id)
     return GateListResponse(
@@ -289,9 +275,8 @@ def list_gates(status: str | None = None, task_id: str | None = None) -> GateLis
 
 
 @router.get("/gates/{gate_id}", response_model=GateResponse)
-def get_gate(gate_id: str) -> GateResponse:
+def get_gate(gate_id: str, gate_store: HumanGateStore = Depends(get_gate_store)) -> GateResponse:
     """Get a specific human gate."""
-    gate_store = _get_gate_store()
     gate = gate_store.get(gate_id)
     if gate is None:
         raise HTTPException(status_code=404, detail=f"Gate {gate_id!r} not found")
@@ -299,9 +284,12 @@ def get_gate(gate_id: str) -> GateResponse:
 
 
 @router.post("/gates/{gate_id}/approve", response_model=GateResponse)
-def approve_gate(gate_id: str, req: GateApproveRequest) -> GateResponse:
+def approve_gate(
+    gate_id: str,
+    req: GateApproveRequest,
+    gate_store: HumanGateStore = Depends(get_gate_store),
+) -> GateResponse:
     """Approve a pending human gate, allowing execution to continue."""
-    gate_store = _get_gate_store()
     try:
         gate = gate_store.approve(gate_id, req.approved_by, req.human_input)
     except KeyError:
@@ -312,9 +300,12 @@ def approve_gate(gate_id: str, req: GateApproveRequest) -> GateResponse:
 
 
 @router.post("/gates/{gate_id}/reject", response_model=GateResponse)
-def reject_gate(gate_id: str, req: GateApproveRequest) -> GateResponse:
+def reject_gate(
+    gate_id: str,
+    req: GateApproveRequest,
+    gate_store: HumanGateStore = Depends(get_gate_store),
+) -> GateResponse:
     """Reject a pending human gate, halting execution."""
-    gate_store = _get_gate_store()
     try:
         gate = gate_store.reject(gate_id, req.approved_by, req.human_input)
     except KeyError:

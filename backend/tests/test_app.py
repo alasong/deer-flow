@@ -46,17 +46,12 @@ async def test_full_flow_integration():
     service = LivingAgentService(poll_interval=0.1)
     await service.start()
 
-    # Wire stores into the router (same as lifespan does)
-    agent_tasks.setup(
-        registry=service.registry,
-        task_store=service.task_store,
-        checkpointer=service.checkpointer,
-        gate_store=service.gate_store,
-    )
-
-    # Build a minimal FastAPI app with the agent_tasks router
+    # Wire stores into app.state for DI
     app = FastAPI()
     app.include_router(agent_tasks.router)
+    app.state.agent_registry = service.registry
+    app.state.task_store = service.task_store
+    app.state.gate_store = service.gate_store
 
     with TestClient(app) as client:
         # Register an agent

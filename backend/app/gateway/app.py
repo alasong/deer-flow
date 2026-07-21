@@ -280,13 +280,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             living_agent = LivingAgentService(poll_interval=5.0)
             await living_agent.start()
 
-            # Wire stores into the agent_tasks router so API endpoints can access them
-            agent_tasks.setup(
-                registry=living_agent.registry,
-                task_store=living_agent.task_store,
-                checkpointer=living_agent.checkpointer,
-                gate_store=living_agent.gate_store,
-            )
+            # Wire stores into app.state for dependency-injected endpoints
+            app.state.agent_registry = living_agent.registry
+            app.state.task_store = living_agent.task_store
+            app.state.checkpointer = living_agent.checkpointer
+            app.state.gate_store = living_agent.gate_store
 
             app.state.living_agent = living_agent
             logger.info("Living agent service started")
