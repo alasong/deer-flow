@@ -1,6 +1,6 @@
 "use client";
 
-import { BotIcon, CalendarClock, MessagesSquare, ShieldCheck, SquareTerminal, Workflow } from "lucide-react";
+import { BotIcon, CalendarClock, MessagesSquare } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -74,39 +74,6 @@ export function WorkspaceNavChatList() {
               </TooltipContent>
             </Tooltip>
           )}
-        </SidebarMenuItem>
-        <SidebarMenuItem>
-          <SidebarMenuButton
-            isActive={pathname.startsWith("/workspace/living-agents")}
-            asChild
-          >
-            <Link className="text-muted-foreground" href="/workspace/living-agents">
-              <Workflow />
-              <span>{t.sidebar.livingAgents}</span>
-            </Link>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
-        <SidebarMenuItem>
-          <SidebarMenuButton
-            isActive={pathname.startsWith("/workspace/tasks")}
-            asChild
-          >
-            <Link className="text-muted-foreground" href="/workspace/tasks">
-              <SquareTerminal />
-              <span>{t.sidebar.tasks}</span>
-            </Link>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
-        <SidebarMenuItem>
-          <SidebarMenuButton
-            isActive={pathname.startsWith("/workspace/gates")}
-            asChild
-          >
-            <Link className="text-muted-foreground" href="/workspace/gates">
-              <ShieldCheck />
-              <span>{t.sidebar.gates}</span>
-            </Link>
-          </SidebarMenuButton>
         </SidebarMenuItem>
         <SidebarMenuItem>
           <SidebarMenuButton

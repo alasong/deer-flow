@@ -801,6 +801,7 @@ async def launch_scheduled_thread_run(
     if app is not None:
         try:
             from deerflow.config import get_app_config
+
             _cfg = get_app_config()
             if _cfg.scheduler is not None:
                 _scheduled_recursion_limit = _cfg.scheduler.default_recursion_limit

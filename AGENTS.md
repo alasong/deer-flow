@@ -74,19 +74,7 @@ Scheduled-task note:
 - The scheduled-task MVP adds a workspace page at `/workspace/scheduled-tasks` plus a background scheduler service gated by `config.yaml -> scheduler.enabled`.
 - Scheduled background runs are intentionally non-interactive: they execute through the normal run lifecycle, but the lead-agent toolset excludes `ask_clarification` when `context.non_interactive=true`. The key is honored only for internally-authenticated callers (the scheduler launch path); client-supplied `context.non_interactive` is dropped.
 
-**Living Agent** system (P0, `backend/packages/harness/deerflow/`):
-- [`agents/model.py`](backend/packages/harness/deerflow/agents/model.py) — Agent dataclass (capabilities, status, access_level)
-- [`agents/registry.py`](backend/packages/harness/deerflow/agents/registry.py) — AgentRegistry (CRUD + capability prefix routing + file persistence)
-- [`tasks/model.py`](backend/packages/harness/deerflow/tasks/model.py) — Task dataclass + lifecycle transitions (pending→claimed→executing→completed/failed)
-- [`tasks/store.py`](backend/packages/harness/deerflow/tasks/store.py) — TaskStore (thread-safe + file persistence)
-- [`tasks/classifier.py`](backend/packages/harness/deerflow/tasks/classifier.py) — Keyword-based task→skill/channel classification
-- [`tasks/orchestrator.py`](backend/packages/harness/deerflow/tasks/orchestrator.py) — SkillOrchestrator: execution plan generation (skill matching, channel selection, gate steps)
-- [`tasks/gate.py`](backend/packages/harness/deerflow/tasks/gate.py) — HumanGate model + GateStatus lifecycle transitions
-- [`tasks/gate_store.py`](backend/packages/harness/deerflow/tasks/gate_store.py) — HumanGateStore (thread-safe + file persistence)
-- [`runtime/checkpointer/task_checkpointer.py`](backend/packages/harness/deerflow/runtime/checkpointer/task_checkpointer.py) — Per-task checkpoint wrapper around LangGraph checkpointer (save/restore by task_id)
-- [`runtime/agent_worker.py`](backend/packages/harness/deerflow/runtime/agent_worker.py) — Background asyncio worker (polls queue → matches agent → executes via skill; supports orchestrator plans and HumanGate creation)
-- [`app/gateway/routers/agent_tasks.py`](backend/app/gateway/routers/agent_tasks.py) — REST API: agent CRUD + task submit/claim/cancel/status + gate list/approve/reject
-- [`app/gateway/living_agent.py`](backend/app/gateway/living_agent.py) — LivingAgentService: wires AgentWorker into Gateway lifespan (start/stop lifecycle)
+**Legacy (removed):** The **Living Agent** system (agent registry, task store, background worker, task checkpointer, executor client) has been removed. The remaining gate models (`tasks/gate.py`, `tasks/gate_store.py`) are kept for potential future use.
 
 ## Commands: Root vs. Module
 

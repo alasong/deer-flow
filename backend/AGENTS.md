@@ -307,27 +307,6 @@ Principal builder. Before changing authorization, read the
 Also see [docs/middleware-execution-flow.md](docs/middleware-execution-flow.md) for
 the Chinese-language execution-flow diagram and subagent middleware set.
 
-### Living Agent System
-
-Background task execution framework: agents register capabilities, clients submit
-tasks, a background worker dispatches and executes them. Independent of the Lead
-Agent graph runtime.
-
-→ Full documentation: [docs/living-agent-system.md](docs/living-agent-system.md)
-
-**Module map:** `Agent` model (`deerflow/agents/model.py`) · `AgentRegistry` (`deerflow/agents/registry.py`) · `Task` model (`deerflow/tasks/model.py`) · `TaskStore` (`deerflow/tasks/store.py`) · `Classifier` (`deerflow/tasks/classifier.py`) · `Orchestrator` (`deerflow/tasks/orchestrator.py`) · `HumanGate` (`deerflow/tasks/gate.py`) · `HumanGateStore` (`deerflow/tasks/gate_store.py`) · `TaskCheckpointer` (`deerflow/runtime/checkpointer/task_checkpointer.py`) · `AgentWorker` (`deerflow/runtime/agent_worker.py`) · `LivingAgentService` (`app/gateway/living_agent.py`) · `AgentTasks Router` (`app/gateway/routers/agent_tasks.py`)
-
-**Lifecycle:** `pending → claimed → executing → completed | failed`. Tasks are submitted via REST API, matched to agents by capability prefix routing, and executed by a pluggable callback. Human-in-the-loop gates pause execution for approval via `POST /api/agents/gates/{id}/approve|reject`.
-
-**REST API** (all at `/api/agents`):
-- Agents: `GET/POST /agents`, `GET/DELETE /agents/{id}`
-- Tasks: `GET/POST /tasks`, `GET /tasks/{id}`, `POST /tasks/{id}/claim`, `POST /tasks/{id}/cancel`
-- Gates: `GET /gates`, `GET /gates/{id}`, `POST /gates/{id}/approve`, `POST /gates/{id}/reject`
-
-**Wiring:** `LivingAgentService` in `app.py` lifespan owns shared stores and manages worker start/stop. Stores wired to `app.state` for `Depends()` DI in router endpoints.
-
-**Tests:** `test_agent_worker.py` (24) · `test_agent_tasks_router.py` (29) · `test_living_agent.py` (5) · `test_app.py` (2)
-
 ### Configuration System
 
 **Main Configuration** (`config.yaml` at project root). See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for full detail.

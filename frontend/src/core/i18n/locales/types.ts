@@ -181,12 +181,9 @@ export interface Translations {
     chats: string;
     demoChats: string;
     agents: string;
-    livingAgents: string;
-    tasks: string;
-    gates: string;
+    channels: string;
     scheduledTasks: string;
     agentsDisabledTooltip: string;
-    channels: string;
   };
 
   // Scheduled tasks

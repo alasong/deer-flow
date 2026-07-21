@@ -12,7 +12,6 @@ from app.gateway.config import get_gateway_config
 from app.gateway.csrf_middleware import CSRFMiddleware, get_configured_cors_origins
 from app.gateway.deps import langgraph_runtime
 from app.gateway.routers import (
-    agent_tasks,
     agents,
     artifacts,
     assistants_compat,
@@ -273,45 +272,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception:
             logger.exception("Failed to initialize scheduled task service")
 
-        # Start living agent worker (AgentRegistry, TaskStore, HumanGateStore, etc.)
-        try:
-            from app.gateway.living_agent import LivingAgentService
-
-            living_agent = LivingAgentService(
-                poll_interval=startup_config.living_agent.poll_interval_seconds,
-                config=startup_config.living_agent,
-            )
-            await living_agent.start()
-
-            # Wire stores into app.state for dependency-injected endpoints
-            app.state.agent_registry = living_agent.registry
-            app.state.task_store = living_agent.task_store
-            app.state.living_agent_checkpointer = living_agent.checkpointer
-            app.state.gate_store = living_agent.gate_store
-
-            app.state.living_agent = living_agent
-            logger.info("Living agent service started")
-        except Exception:
-            logger.exception("Failed to initialize living agent service")
-
         yield
-
-        # Stop living agent worker
-        living_agent = getattr(app.state, "living_agent", None)
-        if living_agent is not None:
-            try:
-                await asyncio.wait_for(
-                    living_agent.stop(),
-                    timeout=_SHUTDOWN_HOOK_TIMEOUT_SECONDS,
-                )
-                logger.info("Living agent service stopped")
-            except TimeoutError:
-                logger.warning(
-                    "Living agent stop exceeded %.1fs; proceeding with worker exit.",
-                    _SHUTDOWN_HOOK_TIMEOUT_SECONDS,
-                )
-            except Exception:
-                logger.exception("Failed to stop living agent service")
 
         try:
             await auth.close_oidc_service()
@@ -534,11 +495,6 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
 
     # Scheduled tasks API is mounted at /api/scheduled-tasks
     app.include_router(scheduled_tasks.router)
-
-    # Living Agent API (agent CRUD, task lifecycle, human gates)
-    # MUST be registered before the old agents router to prevent
-    # GET /agents/{name} from catching exact routes like /agents, /tasks, /gates.
-    app.include_router(agent_tasks.router)
 
     # Agents API is mounted at /api/agents
     app.include_router(agents.router)

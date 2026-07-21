@@ -69,13 +69,15 @@ class TestHumanGate:
         assert "resolved_at" in d
 
     def test_from_dict(self):
-        gate = HumanGate.from_dict({
-            "gate_id": "g1",
-            "task_id": "t1",
-            "step_index": 0,
-            "description": "Review",
-            "status": "approved",
-        })
+        gate = HumanGate.from_dict(
+            {
+                "gate_id": "g1",
+                "task_id": "t1",
+                "step_index": 0,
+                "description": "Review",
+                "status": "approved",
+            }
+        )
         assert gate.gate_id == "g1"
         assert gate.status == GateStatus.approved
 

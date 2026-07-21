@@ -11,7 +11,6 @@ __all__ = [
     "Agent",
     "AgentStatus",
     "AgentAccessLevel",
-    "AgentRegistry",
 ]
 
 
@@ -26,11 +25,6 @@ def __getattr__(name: str):
         }
         globals().update(exports)
         return exports[name]
-    if name == "AgentRegistry":
-        from .registry import AgentRegistry
-
-        globals()["AgentRegistry"] = AgentRegistry
-        return AgentRegistry
     if name == "create_deerflow_agent":
         from .factory import create_deerflow_agent
 
