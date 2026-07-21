@@ -80,9 +80,13 @@ Scheduled-task note:
 - [`tasks/model.py`](backend/packages/harness/deerflow/tasks/model.py) — Task dataclass + lifecycle transitions (pending→claimed→executing→completed/failed)
 - [`tasks/store.py`](backend/packages/harness/deerflow/tasks/store.py) — TaskStore (thread-safe + file persistence)
 - [`tasks/classifier.py`](backend/packages/harness/deerflow/tasks/classifier.py) — Keyword-based task→skill/channel classification
+- [`tasks/orchestrator.py`](backend/packages/harness/deerflow/tasks/orchestrator.py) — SkillOrchestrator: execution plan generation (skill matching, channel selection, gate steps)
+- [`tasks/gate.py`](backend/packages/harness/deerflow/tasks/gate.py) — HumanGate model + GateStatus lifecycle transitions
+- [`tasks/gate_store.py`](backend/packages/harness/deerflow/tasks/gate_store.py) — HumanGateStore (thread-safe + file persistence)
 - [`runtime/checkpointer/task_checkpointer.py`](backend/packages/harness/deerflow/runtime/checkpointer/task_checkpointer.py) — Per-task checkpoint wrapper around LangGraph checkpointer (save/restore by task_id)
-- [`runtime/agent_worker.py`](backend/packages/harness/deerflow/runtime/agent_worker.py) — Background asyncio worker (polls queue → matches agent → executes via skill)
-- [`app/gateway/routers/agent_tasks.py`](backend/app/gateway/routers/agent_tasks.py) — REST API: agent CRUD + task submit/claim/cancel/status
+- [`runtime/agent_worker.py`](backend/packages/harness/deerflow/runtime/agent_worker.py) — Background asyncio worker (polls queue → matches agent → executes via skill; supports orchestrator plans and HumanGate creation)
+- [`app/gateway/routers/agent_tasks.py`](backend/app/gateway/routers/agent_tasks.py) — REST API: agent CRUD + task submit/claim/cancel/status + gate list/approve/reject
+- [`app/gateway/living_agent.py`](backend/app/gateway/living_agent.py) — LivingAgentService: wires AgentWorker into Gateway lifespan (start/stop lifecycle)
 
 ## Commands: Root vs. Module
 
