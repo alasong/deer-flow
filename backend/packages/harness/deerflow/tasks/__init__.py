@@ -5,9 +5,19 @@ from deerflow.tasks.model import (
     TaskPriority,
     TaskStatus,
 )
+from deerflow.tasks.orchestrator import (
+    ExecutionPlan,
+    ExecutionStep,
+    PlanStepKind,
+    SkillOrchestrator,
+)
 
 __all__ = [
     "Task",
     "TaskStatus",
     "TaskPriority",
+    "SkillOrchestrator",
+    "ExecutionPlan",
+    "ExecutionStep",
+    "PlanStepKind",
 ]
