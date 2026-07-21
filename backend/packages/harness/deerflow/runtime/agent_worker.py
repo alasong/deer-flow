@@ -13,7 +13,7 @@ from deerflow.tasks.classifier import classify_task
 from deerflow.tasks.gate import GateStatus, HumanGate
 from deerflow.tasks.gate_store import HumanGateStore
 from deerflow.tasks.model import Task, TaskStatus
-from deerflow.tasks.orchestrator import PlanStepKind, SkillOrchestrator
+from deerflow.tasks.orchestrator import ExecutionStep, PlanStepKind, SkillOrchestrator
 from deerflow.tasks.store import TaskStore
 
 logger = logging.getLogger(__name__)
@@ -89,16 +89,64 @@ class AgentWorker:
             self._task = None
 
     # ------------------------------------------------------------------
+    # Step execution
+    # ------------------------------------------------------------------
+
+    def _execute_steps(
+        self,
+        steps: list[ExecutionStep],
+        task: Task,
+    ) -> tuple[list[dict[str, Any]], bool, int | None]:
+        """Execute a list of steps sequentially.
+
+        Returns:
+            results: Execution result dicts for completed steps.
+            all_succeeded: True if every executed step completed successfully.
+            gate_index: Index of the gate step that paused execution, or None.
+        """
+        executor = self._executor
+        if executor is None:
+            return [], True, None
+
+        results: list[dict[str, Any]] = []
+
+        for i, step in enumerate(steps):
+            if step.is_gate:
+                if self._gate_store is not None:
+                    import uuid
+
+                    gate = HumanGate(
+                        gate_id=f"gate_{uuid.uuid4().hex[:12]}",
+                        task_id=task.task_id,
+                        step_index=i,
+                        description=step.description,
+                    )
+                    self._gate_store.create(gate)
+                    logger.info(
+                        "Gate created for task %s: %s (%s)", task.task_id, gate.gate_id, step.description
+                    )
+                return results, True, i
+
+            logger.info("Executing step %d: %s (%s)", i + 1, len(steps), step.skill, step.channel)
+            result = executor(task, step.skill, step.channel)
+            results.append(result)
+
+            if result.get("status") not in ("completed", "ok"):
+                logger.warning("Step %d failed for task %s: %s", i, task.task_id, result.get("error", "unknown"))
+                return results, False, None
+
+        return results, True, None
+
+    # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
 
     def _poll(self) -> int:
         """Single poll cycle. Returns number of tasks dispatched."""
-        pending = self._task_store.find_pending()[:5]
-        if not pending:
-            return 0
-
         dispatched = 0
+
+        # 1. Dispatch pending tasks
+        pending = self._task_store.find_pending()[:5]
         for task in pending:
             try:
                 if self._dispatch(task):
@@ -109,7 +157,11 @@ class AgentWorker:
                     self._task_store.fail(task.task_id, str(exc))
                 except Exception:
                     pass
-        return dispatched
+
+        # 2. Check for gate-resumable tasks
+        resumed = self._check_gate_resumes()
+
+        return dispatched + resumed
 
     def _dispatch(self, task: Task) -> bool:
         """Dispatch a single task to a matching agent.
@@ -176,52 +228,165 @@ class AgentWorker:
             self._task_store.complete(task.task_id, {"note": "empty plan; no skills matched"})
             return True
 
-        executor = self._executor
-        if executor is None:
+        if self._executor is None:
             self._task_store.complete(task.task_id, {"note": "no executor configured; task skipped"})
             return True
 
-        # Execute steps sequentially. Gate steps create HumanGate records
-        # and pause further execution until the gate is approved.
-        results: list[dict[str, Any]] = []
-        all_succeeded = True
-        hit_gate = False
+        # Execute steps. Gate steps create HumanGate records and pause further
+        # execution until the gate is approved; the resume path is handled by
+        # _check_gate_resumes in a later poll cycle.
+        results, all_succeeded, gate_index = self._execute_steps(plan.steps, task)
 
-        for i, step in enumerate(plan.steps):
-            if step.is_gate:
-                if self._gate_store:
-                    import uuid
-                    gate = HumanGate(
-                        gate_id=f"gate_{uuid.uuid4().hex[:12]}",
-                        task_id=task.task_id,
-                        step_index=i,
-                        description=step.description,
-                    )
-                    self._gate_store.create(gate)
-                    logger.info("Gate created for task %s: %s (%s)", task.task_id, gate.gate_id, step.description)
+        if gate_index is not None:
+            remaining_steps = plan.steps[gate_index + 1:]
+            remaining_data = [
+                {
+                    "skill": s.skill,
+                    "channel": s.channel,
+                    "kind": s.kind.value,
+                    "description": s.description,
+                    "params": s.params,
+                }
+                for s in remaining_steps
+            ]
+            self._checkpointer.save(task, phase="gate_paused", context={
+                "gate_step_index": gate_index,
+                "remaining_steps": remaining_data,
+                "agent_id": agent_id,
+            })
+            logger.info(
+                "Task %s paused at gate %d; %d remaining step(s) saved for resume",
+                task.task_id, gate_index, len(remaining_data),
+            )
 
-                hit_gate = True
-                # Pause after creating the gate — wait for human approval
-                break
+        if not all_succeeded and gate_index is None:
+            error = "step execution failed"
+            if results:
+                last = results[-1]
+                error = last.get("error", last.get("output", "step execution failed"))
+            self._checkpointer.save(task, phase="failed", context={"results": results, "error": error})
+            self._task_store.fail(task.task_id, error)
 
-            logger.info("Executing step %d/%d: %s (%s)", i + 1, plan.total_steps, step.skill, step.channel)
-            result = executor(task, step.skill, step.channel)
-            results.append(result)
-
-            if result.get("status") not in ("completed", "ok"):
-                all_succeeded = False
-                error = result.get("error", result.get("output", f"step {i} failed"))
-                self._checkpointer.save(task, phase=f"step_{i}_failed", context={"result": result, "step": i})
-                self._task_store.fail(task.task_id, error)
-                break
-
-        if all_succeeded and not hit_gate:
+        if all_succeeded and gate_index is None:
             self._checkpointer.save(task, phase="complete", context={"results": results})
             self._checkpointer.clear(task.task_id)
             self._task_store.complete(task.task_id, {"results": results, "status": "completed"})
 
         return True
 
-    def update_agent_status(self, agent_id: str, status: AgentStatus) -> None:
+    def _check_gate_resumes(self) -> int:
+        """Check executing tasks for resolved gates and resume/reject them.
+
+        Returns the number of tasks that were resumed or failed.
+        """
+        if self._gate_store is None:
+            return 0
+
+        resumed = 0
+        executing = self._task_store.list(status=TaskStatus.executing)
+
+        for task in executing:
+            pending_gates = self._gate_store.find_pending_by_task(task.task_id)
+
+            # Check all gates for this task — are any resolved?
+            all_gates = self._gate_store.list(task_id=task.task_id)
+            resolved = [g for g in all_gates if g.is_resolved]
+            if not resolved:
+                continue
+
+            # If any gate was rejected, fail the task
+            rejected = [g for g in resolved if g.status == GateStatus.rejected]
+            if rejected:
+                logger.info(
+                    "Gate %s rejected; failing task %s", rejected[0].gate_id, task.task_id,
+                )
+                self._task_store.fail(task.task_id, f"Gate rejected: {rejected[0].description}")
+                resumed += 1
+                continue
+
+            # Gate was approved — resume
+            approved = [g for g in resolved if g.status == GateStatus.approved]
+            if approved:
+                ok = self._resume_after_gate(task)
+                if ok:
+                    resumed += 1
+
+        return resumed
+
+    def _resume_after_gate(self, task: Task) -> bool:
+        """Resume task execution after a gate was approved.
+
+        Loads the gate-paused checkpoint and continues executing remaining steps.
+        """
+        meta = self._checkpointer.restore(task)
+        if meta is None or meta.get("phase") != "gate_paused":
+            logger.warning("No gate_paused state found for task %s", task.task_id)
+            return False
+
+        remaining_data = meta.get("context", {}).get("remaining_steps", [])
+        agent_id = meta.get("context", {}).get("agent_id", "")
+
+        if not remaining_data:
+            # No more steps — complete the task
+            self._checkpointer.save(task, phase="complete", context={"note": "gate approved, no remaining steps"})
+            self._checkpointer.clear(task.task_id)
+            self._task_store.complete(task.task_id, {"status": "completed", "note": "gate approved, no remaining steps"})
+            return True
+
+        # Rebuild ExecutionStep list from saved dict data
+        steps = [
+            ExecutionStep(
+                skill=s.get("skill", ""),
+                channel=s.get("channel", ""),
+                description=s.get("description", ""),
+                kind=PlanStepKind(s.get("kind", "sequence")),
+                params=s.get("params", {}),
+            )
+            for s in remaining_data
+        ]
+
+        if self._executor is None:
+            self._task_store.complete(task.task_id, {"note": "no executor configured during resume; task skipped"})
+            return True
+
+        results, all_succeeded, gate_index = self._execute_steps(steps, task)
+
+        if gate_index is not None:
+            # Hit another gate — save updated gate-pause state
+            remaining_steps = steps[gate_index + 1:]
+            remaining_data = [
+                {
+                    "skill": s.skill,
+                    "channel": s.channel,
+                    "kind": s.kind.value,
+                    "description": s.description,
+                    "params": s.params,
+                }
+                for s in remaining_steps
+            ]
+            self._checkpointer.save(task, phase="gate_paused", context={
+                "gate_step_index": gate_index,
+                "remaining_steps": remaining_data,
+                "agent_id": agent_id,
+            })
+            logger.info(
+                "Task %s paused at another gate %d during resume; %d remaining step(s) saved",
+                task.task_id, gate_index, len(remaining_data),
+            )
+
+        if not all_succeeded and gate_index is None:
+            error = "resumed step execution failed"
+            if results:
+                last = results[-1]
+                error = last.get("error", last.get("output", "resumed step execution failed"))
+            self._task_store.fail(task.task_id, error)
+            return False
+
+        if all_succeeded and gate_index is None:
+            self._checkpointer.save(task, phase="complete", context={"results": results})
+            self._checkpointer.clear(task.task_id)
+            self._task_store.complete(task.task_id, {"results": results, "status": "completed"})
+
+        return True
         """Update agent status in the registry."""
         self._agent_registry.update_status(agent_id, status)
