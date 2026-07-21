@@ -272,7 +272,45 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception:
             logger.exception("Failed to initialize scheduled task service")
 
+        # Start living agent worker (AgentRegistry, TaskStore, HumanGateStore, etc.)
+        try:
+            from app.gateway import agent_tasks as agent_tasks_router
+            from app.gateway.living_agent import LivingAgentService
+
+            living_agent = LivingAgentService(poll_interval=5.0)
+            await living_agent.start()
+
+            # Wire stores into the agent_tasks router so API endpoints can access them
+            agent_tasks_router.setup(
+                registry=living_agent.registry,
+                task_store=living_agent.task_store,
+                checkpointer=living_agent.checkpointer,
+                gate_store=living_agent.gate_store,
+            )
+
+            app.state.living_agent = living_agent
+            logger.info("Living agent service started")
+        except Exception:
+            logger.exception("Failed to initialize living agent service")
+
         yield
+
+        # Stop living agent worker
+        living_agent = getattr(app.state, "living_agent", None)
+        if living_agent is not None:
+            try:
+                await asyncio.wait_for(
+                    living_agent.stop(),
+                    timeout=_SHUTDOWN_HOOK_TIMEOUT_SECONDS,
+                )
+                logger.info("Living agent service stopped")
+            except TimeoutError:
+                logger.warning(
+                    "Living agent stop exceeded %.1fs; proceeding with worker exit.",
+                    _SHUTDOWN_HOOK_TIMEOUT_SECONDS,
+                )
+            except Exception:
+                logger.exception("Failed to stop living agent service")
 
         try:
             await auth.close_oidc_service()
