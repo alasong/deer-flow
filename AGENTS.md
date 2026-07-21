@@ -74,6 +74,16 @@ Scheduled-task note:
 - The scheduled-task MVP adds a workspace page at `/workspace/scheduled-tasks` plus a background scheduler service gated by `config.yaml -> scheduler.enabled`.
 - Scheduled background runs are intentionally non-interactive: they execute through the normal run lifecycle, but the lead-agent toolset excludes `ask_clarification` when `context.non_interactive=true`. The key is honored only for internally-authenticated callers (the scheduler launch path); client-supplied `context.non_interactive` is dropped.
 
+**Living Agent** system (P0, `backend/packages/harness/deerflow/`):
+- [`agents/model.py`](backend/packages/harness/deerflow/agents/model.py) — Agent dataclass (capabilities, status, access_level)
+- [`agents/registry.py`](backend/packages/harness/deerflow/agents/registry.py) — AgentRegistry (CRUD + capability prefix routing + file persistence)
+- [`tasks/model.py`](backend/packages/harness/deerflow/tasks/model.py) — Task dataclass + lifecycle transitions (pending→claimed→executing→completed/failed)
+- [`tasks/store.py`](backend/packages/harness/deerflow/tasks/store.py) — TaskStore (thread-safe + file persistence)
+- [`tasks/classifier.py`](backend/packages/harness/deerflow/tasks/classifier.py) — Keyword-based task→skill/channel classification
+- [`runtime/checkpointer/task_checkpointer.py`](backend/packages/harness/deerflow/runtime/checkpointer/task_checkpointer.py) — Per-task checkpoint wrapper around LangGraph checkpointer (save/restore by task_id)
+- [`runtime/agent_worker.py`](backend/packages/harness/deerflow/runtime/agent_worker.py) — Background asyncio worker (polls queue → matches agent → executes via skill)
+- [`app/gateway/routers/agent_tasks.py`](backend/app/gateway/routers/agent_tasks.py) — REST API: agent CRUD + task submit/claim/cancel/status
+
 ## Commands: Root vs. Module
 
 **Root `make` targets drive the whole stack** (run from the repo root):
