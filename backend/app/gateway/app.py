@@ -532,11 +532,13 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
     # Scheduled tasks API is mounted at /api/scheduled-tasks
     app.include_router(scheduled_tasks.router)
 
+    # Living Agent API (agent CRUD, task lifecycle, human gates)
+    # MUST be registered before the old agents router to prevent
+    # GET /agents/{name} from catching exact routes like /agents, /tasks, /gates.
+    app.include_router(agent_tasks.router)
+
     # Agents API is mounted at /api/agents
     app.include_router(agents.router)
-
-    # Living Agent API (agent CRUD, task lifecycle, human gates)
-    app.include_router(agent_tasks.router)
 
     # Suggestions API is mounted at /api/threads/{thread_id}/suggestions
     app.include_router(suggestions.router)
