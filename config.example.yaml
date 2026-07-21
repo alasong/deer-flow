@@ -756,19 +756,17 @@ tools:
 
   # Web fetch tool (uses Crawl4AI - self-hosted headless Chromium, no API key)
   # Crawl4AI returns server-cleaned "fit" markdown directly (no readability step needed),
-  # ideal for JavaScript-heavy sites. Self-host (JWT auth is off by default, no key):
-  #   docker run -d -p 11235:11235 --shm-size=1g unclecode/crawl4ai:0.8.6
-  # For Docker deployments, use the Docker service name instead of localhost.
+  # ideal for JavaScript-heavy sites. Started automatically by ``make dev``.
   # NOTE: Only one web_fetch provider can be active at a time.
   # Comment out the Jina AI web_fetch entry below before enabling this one.
-  # - name: web_fetch
-  #   group: web
-  #   use: deerflow.community.crawl4ai.tools:web_fetch_tool
-  #   base_url: http://localhost:11235   # Crawl4AI server URL (Docker: http://crawl4ai:11235)
-  #   timeout: 30                         # Request timeout in seconds
-  #   # allow_private_addresses: false     # SSRF guard: keep false in production. Set true ONLY for intentional internal targets.
-  #   # filter: fit                       # Markdown filter: fit (default) | raw | bm25 | llm
-  #   # token: $CRAWL4AI_TOKEN            # Bearer token (only if the server has JWT auth enabled)
+  - name: web_fetch
+    group: web
+    use: deerflow.community.crawl4ai.tools:web_fetch_tool
+    base_url: http://localhost:11235   # Crawl4AI server URL
+    timeout: 30                         # Request timeout in seconds
+    # allow_private_addresses: false     # SSRF guard: keep false in production. Set true ONLY for intentional internal targets.
+    # filter: fit                       # Markdown filter: fit (default) | raw | bm25 | llm
+    # token: $CRAWL4AI_TOKEN            # Bearer token (only if the server has JWT auth enabled)
 
   # Web capture tool (uses Browserless /screenshot to render a page as an artifact)
   # Browserless captures JavaScript-heavy pages with a real headless Chrome and
@@ -802,14 +800,14 @@ tools:
   #   # api_key: $EXA_API_KEY
 
   # Web fetch tool (uses Jina AI reader)
-  - name: web_fetch
-    group: web
-    use: deerflow.community.jina_ai.tools:web_fetch_tool
-    timeout: 10
-    # Optional proxy for restricted networks / Docker / WSL.
-    # Use host.docker.internal instead of 127.0.0.1 when the proxy runs on the host.
-    # proxy: $HTTPS_PROXY
-    # trust_env: true
+  # - name: web_fetch
+  #   group: web
+  #   use: deerflow.community.jina_ai.tools:web_fetch_tool
+  #   timeout: 10
+  #   # Optional proxy for restricted networks / Docker / WSL.
+  #   # Use host.docker.internal instead of 127.0.0.1 when the proxy runs on the host.
+  #   # proxy: $HTTPS_PROXY
+  #   # trust_env: true
 
   # Web fetch tool (uses InfoQuest)
   # - name: web_fetch

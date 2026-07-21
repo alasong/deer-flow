@@ -250,6 +250,7 @@ _kill_repo_nginx() {
 stop_all() {
     echo "Stopping all services..."
     _report_reclaimed_ports
+    _kill_repo_processes "crawl4ai_server"
     _kill_repo_processes "uvicorn app.gateway.app:app"
     _kill_repo_processes "next dev"
     _kill_repo_processes "next start"
@@ -261,6 +262,7 @@ stop_all() {
     # so a lingering nginx (or any deer-flow process) that _kill_repo_nginx did
     # not match by name still gets reclaimed — otherwise `make dev` fails its
     # nginx port preflight.
+    _kill_repo_port 11235
     _kill_repo_port 8001
     _kill_repo_port 3000
     _kill_repo_port 2026
@@ -402,6 +404,7 @@ echo ""
 echo "  Mode: $MODE_LABEL"
 echo ""
 echo "  Services:"
+echo "    Crawl4AI    → localhost:11235 (web_fetch, headless browser)"
 echo "    Gateway     → localhost:8001  (REST API + agent runtime)"
 echo "    Frontend    → localhost:3000  (Next.js)"
 echo "    Nginx       → localhost:2026  (reverse proxy)"
@@ -457,12 +460,17 @@ run_service() {
 mkdir -p logs
 mkdir -p temp/client_body_temp temp/proxy_temp temp/fastcgi_temp temp/uwsgi_temp temp/scgi_temp
 
-# 1. Gateway API
+# 1. Crawl4AI server (web_fetch, headless browser)
+run_service "Crawl4AI" \
+    "cd backend && PYTHONPATH=. uv run python scripts/crawl4ai_server.py > ../logs/crawl4ai.log 2>&1" \
+    11235 60
+
+# 2. Gateway API
 run_service "Gateway" \
     "cd backend && PYTHONPATH=. uv run uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001 $GATEWAY_EXTRA_FLAGS > ../logs/gateway.log 2>&1" \
     8001 30
 
-# 2. Frontend
+# 3. Frontend
 run_service "Frontend" \
     "cd frontend && $FRONTEND_CMD > ../logs/frontend.log 2>&1" \
     3000 120
