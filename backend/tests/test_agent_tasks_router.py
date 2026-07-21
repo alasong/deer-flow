@@ -16,6 +16,8 @@ from app.gateway.routers.agent_tasks import (
 from deerflow.agents.model import Agent
 from deerflow.agents.registry import AgentRegistry
 from deerflow.runtime.checkpointer.task_checkpointer import TaskCheckpointer
+from deerflow.tasks.gate import HumanGate
+from deerflow.tasks.gate_store import HumanGateStore
 from deerflow.tasks.model import Task
 from deerflow.tasks.store import TaskStore
 
@@ -37,11 +39,13 @@ def stores() -> dict[str, Any]:
     registry = AgentRegistry()
     task_store = TaskStore()
     checkpointer = TaskCheckpointer(MagicMock())
-    router_setup(registry, task_store, checkpointer)
+    gate_store = HumanGateStore()
+    router_setup(registry, task_store, checkpointer, gate_store)
     return {
         "registry": registry,
         "task_store": task_store,
         "checkpointer": checkpointer,
+        "gate_store": gate_store,
     }
 
 
@@ -206,6 +210,7 @@ class TestTaskEndpoints:
         at_module._registry = None
         at_module._task_store = None
         at_module._checkpointer = None
+        at_module._gate_store = None
 
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
@@ -215,4 +220,113 @@ class TestTaskEndpoints:
         client = TestClient(app)
 
         resp = client.post("/api/agents/tasks", json={"capability": "x", "description": "x"})
+        assert resp.status_code == 503
+
+
+class TestGateEndpoints:
+    def test_list_gates_empty(self, client, stores):
+        resp = client.get("/api/agents/gates")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["count"] == 0
+        assert data["gates"] == []
+
+    def test_list_gates(self, client, stores):
+        gate_store = stores["gate_store"]
+        gate_store.create(HumanGate(gate_id="g1", task_id="t1", step_index=0))
+        gate_store.create(HumanGate(gate_id="g2", task_id="t2", step_index=0))
+
+        resp = client.get("/api/agents/gates")
+        assert resp.status_code == 200
+        assert resp.json()["count"] == 2
+
+    def test_list_gates_filter_status(self, client, stores):
+        gate_store = stores["gate_store"]
+        gate_store.create(HumanGate(gate_id="g1", task_id="t1", step_index=0))
+        gate_store.create(HumanGate(gate_id="g2", task_id="t1", step_index=0))
+        gate_store.approve("g2")
+
+        resp = client.get("/api/agents/gates?status=pending")
+        assert resp.json()["count"] == 1
+
+        resp = client.get("/api/agents/gates?status=approved")
+        assert resp.json()["count"] == 1
+
+    def test_list_gates_filter_task(self, client, stores):
+        gate_store = stores["gate_store"]
+        gate_store.create(HumanGate(gate_id="g1", task_id="t1", step_index=0))
+        gate_store.create(HumanGate(gate_id="g2", task_id="t2", step_index=0))
+
+        resp = client.get("/api/agents/gates?task_id=t1")
+        assert resp.json()["count"] == 1
+        assert resp.json()["gates"][0]["gate_id"] == "g1"
+
+    def test_get_gate(self, client, stores):
+        gate_store = stores["gate_store"]
+        gate_store.create(HumanGate(gate_id="g1", task_id="t1", step_index=0))
+
+        resp = client.get("/api/agents/gates/g1")
+        assert resp.status_code == 200
+        assert resp.json()["gate_id"] == "g1"
+
+    def test_get_gate_not_found(self, client, stores):
+        resp = client.get("/api/agents/gates/nonexistent")
+        assert resp.status_code == 404
+
+    def test_approve_gate(self, client, stores):
+        gate_store = stores["gate_store"]
+        gate_store.create(HumanGate(gate_id="g1", task_id="t1", step_index=0))
+
+        resp = client.post("/api/agents/gates/g1/approve", json={
+            "approved_by": "admin",
+            "human_input": "Looks good",
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "approved"
+        assert data["approved_by"] == "admin"
+        assert data["human_input"] == "Looks good"
+
+    def test_approve_not_found(self, client, stores):
+        resp = client.post("/api/agents/gates/nonexistent/approve", json={})
+        assert resp.status_code == 404
+
+    def test_approve_already_approved(self, client, stores):
+        gate_store = stores["gate_store"]
+        gate_store.create(HumanGate(gate_id="g1", task_id="t1", step_index=0))
+        gate_store.approve("g1")
+
+        resp = client.post("/api/agents/gates/g1/approve", json={})
+        assert resp.status_code == 409
+
+    def test_reject_gate(self, client, stores):
+        gate_store = stores["gate_store"]
+        gate_store.create(HumanGate(gate_id="g1", task_id="t1", step_index=0))
+
+        resp = client.post("/api/agents/gates/g1/reject", json={
+            "approved_by": "admin",
+            "human_input": "Not ready",
+        })
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "rejected"
+        assert resp.json()["human_input"] == "Not ready"
+
+    def test_reject_not_found(self, client, stores):
+        resp = client.post("/api/agents/gates/nonexistent/reject", json={})
+        assert resp.status_code == 404
+
+    def test_gate_not_configured(self):
+        """Without gate_store setup, gate endpoints should return 503."""
+        from app.gateway.routers import agent_tasks as at_module
+
+        at_module._gate_store = None
+
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        app = FastAPI()
+        app.include_router(at_module.router)
+        client = TestClient(app)
+
+        resp = client.get("/api/agents/gates")
         assert resp.status_code == 503

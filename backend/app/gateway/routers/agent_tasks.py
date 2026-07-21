@@ -10,6 +10,8 @@ from deerflow.agents.model import Agent as AgentModel
 from deerflow.agents.model import AgentStatus
 from deerflow.agents.registry import AgentRegistry
 from deerflow.runtime.checkpointer.task_checkpointer import TaskCheckpointer
+from deerflow.tasks.gate import GateStatus, HumanGate
+from deerflow.tasks.gate_store import HumanGateStore
 from deerflow.tasks.model import Task, TaskStatus
 from deerflow.tasks.store import TaskStore
 
@@ -78,17 +80,20 @@ class AgentListResponse(BaseModel):
 _registry: AgentRegistry | None = None
 _task_store: TaskStore | None = None
 _checkpointer: TaskCheckpointer | None = None
+_gate_store: HumanGateStore | None = None
 
 
 def setup(
     registry: AgentRegistry,
     task_store: TaskStore,
     checkpointer: TaskCheckpointer | None = None,
+    gate_store: HumanGateStore | None = None,
 ) -> None:
-    global _registry, _task_store, _checkpointer
+    global _registry, _task_store, _checkpointer, _gate_store
     _registry = registry
     _task_store = task_store
     _checkpointer = checkpointer
+    _gate_store = gate_store
 
 
 def _get_registry() -> AgentRegistry:
@@ -101,6 +106,12 @@ def _get_task_store() -> TaskStore:
     if _task_store is None:
         raise HTTPException(status_code=503, detail="Task store not configured")
     return _task_store
+
+
+def _get_gate_store() -> HumanGateStore:
+    if _gate_store is None:
+        raise HTTPException(status_code=503, detail="Gate store not configured")
+    return _gate_store
 
 
 # ---------------------------------------------------------------------------
@@ -222,6 +233,95 @@ def cancel_task(task_id: str) -> TaskStatusResponse:
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     return _task_to_response(task)
+
+
+# ---------------------------------------------------------------------------
+# Gate endpoints
+# ---------------------------------------------------------------------------
+
+
+class GateResponse(BaseModel):
+    gate_id: str
+    task_id: str
+    step_index: int
+    description: str
+    status: str
+    created_at: str
+    resolved_at: str | None = None
+    approved_by: str | None = None
+    human_input: str | None = None
+
+
+class GateApproveRequest(BaseModel):
+    approved_by: str = ""
+    human_input: str = ""
+
+
+class GateListResponse(BaseModel):
+    gates: list[GateResponse]
+    count: int
+
+
+def _gate_to_response(gate: HumanGate) -> GateResponse:
+    return GateResponse(
+        gate_id=gate.gate_id,
+        task_id=gate.task_id,
+        step_index=gate.step_index,
+        description=gate.description,
+        status=gate.status.value,
+        created_at=gate.created_at,
+        resolved_at=gate.resolved_at or None,
+        approved_by=gate.approved_by or None,
+        human_input=gate.human_input or None,
+    )
+
+
+@router.get("/gates", response_model=GateListResponse)
+def list_gates(status: str | None = None, task_id: str | None = None) -> GateListResponse:
+    """List human gates, optionally filtered by status or task_id."""
+    gate_store = _get_gate_store()
+    status_filter = GateStatus(status) if status else None
+    gates = gate_store.list(status=status_filter, task_id=task_id)
+    return GateListResponse(
+        gates=[_gate_to_response(g) for g in gates],
+        count=len(gates),
+    )
+
+
+@router.get("/gates/{gate_id}", response_model=GateResponse)
+def get_gate(gate_id: str) -> GateResponse:
+    """Get a specific human gate."""
+    gate_store = _get_gate_store()
+    gate = gate_store.get(gate_id)
+    if gate is None:
+        raise HTTPException(status_code=404, detail=f"Gate {gate_id!r} not found")
+    return _gate_to_response(gate)
+
+
+@router.post("/gates/{gate_id}/approve", response_model=GateResponse)
+def approve_gate(gate_id: str, req: GateApproveRequest) -> GateResponse:
+    """Approve a pending human gate, allowing execution to continue."""
+    gate_store = _get_gate_store()
+    try:
+        gate = gate_store.approve(gate_id, req.approved_by, req.human_input)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Gate {gate_id!r} not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return _gate_to_response(gate)
+
+
+@router.post("/gates/{gate_id}/reject", response_model=GateResponse)
+def reject_gate(gate_id: str, req: GateApproveRequest) -> GateResponse:
+    """Reject a pending human gate, halting execution."""
+    gate_store = _get_gate_store()
+    try:
+        gate = gate_store.reject(gate_id, req.approved_by, req.human_input)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Gate {gate_id!r} not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return _gate_to_response(gate)
 
 
 # ---------------------------------------------------------------------------

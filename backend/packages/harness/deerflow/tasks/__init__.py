@@ -11,6 +11,13 @@ from deerflow.tasks.orchestrator import (
     PlanStepKind,
     SkillOrchestrator,
 )
+from deerflow.tasks.gate import (
+    GateStatus,
+    HumanGate,
+)
+from deerflow.tasks.gate_store import (
+    HumanGateStore,
+)
 
 __all__ = [
     "Task",
@@ -20,4 +27,7 @@ __all__ = [
     "ExecutionPlan",
     "ExecutionStep",
     "PlanStepKind",
+    "HumanGate",
+    "GateStatus",
+    "HumanGateStore",
 ]
