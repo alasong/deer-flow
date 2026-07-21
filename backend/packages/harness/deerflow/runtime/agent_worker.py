@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
 from typing import Any
 
 from deerflow.agents.model import AgentStatus
 from deerflow.agents.registry import AgentRegistry
 from deerflow.runtime.checkpointer.task_checkpointer import TaskCheckpointer
+from deerflow.runtime.executor_client import ExecutorClient, NoopExecutorClient
 from deerflow.skills.catalog import SkillCatalog
 from deerflow.tasks.classifier import classify_task
 from deerflow.tasks.gate import GateStatus, HumanGate
@@ -27,7 +27,7 @@ class AgentWorker:
     2. Matches tasks to idle agents via capability routing
     3. Classifies task → selects skill + channel
     4. Saves checkpoint before execution
-    5. Executes via the provided execution callback
+    5. Dispatches to the ``ExecutorClient`` (a separate process)
     6. Saves result or failure
 
     When a ``SkillOrchestrator`` is configured, the worker generates an
@@ -43,6 +43,7 @@ class AgentWorker:
         gate_store: HumanGateStore | None = None,
         orchestrator: SkillOrchestrator | None = None,
         skill_catalog: SkillCatalog | None = None,
+        executor_client: ExecutorClient | None = None,
     ) -> None:
         self._task_store = task_store
         self._agent_registry = agent_registry
@@ -51,23 +52,20 @@ class AgentWorker:
         self._gate_store = gate_store
         self._orchestrator = orchestrator
         self._skill_catalog = skill_catalog
-        self._executor: Callable[[Task, str, str], dict[str, Any]] | None = None
+        self._executor: ExecutorClient = executor_client or NoopExecutorClient()
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
 
-    def set_executor(self, executor: Callable[[Task, str, str], dict[str, Any]]) -> None:
-        """Set the execution callback.
-
-        The callback receives ``(task, skill, channel)`` and returns a result dict.
-        """
-        self._executor = executor
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
 
     async def run(self) -> None:
         """Start the worker loop. Blocks until stop() is called."""
         logger.info("Agent worker started (poll_interval=%ss)", self._poll_interval)
         while not self._stop.is_set():
             try:
-                self._poll()
+                await self._poll()
             except Exception as exc:
                 logger.error("Agent worker poll error: %s", exc)
             await asyncio.sleep(self._poll_interval)
@@ -87,27 +85,24 @@ class AgentWorker:
             except asyncio.CancelledError:
                 pass
             self._task = None
+            await self._executor.close()
 
     # ------------------------------------------------------------------
     # Step execution
     # ------------------------------------------------------------------
 
-    def _execute_steps(
+    async def _execute_steps(
         self,
         steps: list[ExecutionStep],
         task: Task,
     ) -> tuple[list[dict[str, Any]], bool, int | None]:
-        """Execute a list of steps sequentially.
+        """Execute a list of steps sequentially via the executor client.
 
         Returns:
             results: Execution result dicts for completed steps.
             all_succeeded: True if every executed step completed successfully.
             gate_index: Index of the gate step that paused execution, or None.
         """
-        executor = self._executor
-        if executor is None:
-            return [], True, None
-
         results: list[dict[str, Any]] = []
 
         for i, step in enumerate(steps):
@@ -128,7 +123,14 @@ class AgentWorker:
                 return results, True, i
 
             logger.info("Executing step %d: %s (%s)", i + 1, len(steps), step.skill, step.channel)
-            result = executor(task, step.skill, step.channel)
+            result = await self._executor.execute(task, step.skill, step.channel)
+
+            if not isinstance(result, dict):
+                msg = f"executor returned non-dict: {result!r}"
+                logger.error("Step %d failed for task %s: %s", i, task.task_id, msg)
+                results.append({"status": "failed", "error": msg})
+                return results, False, None
+
             results.append(result)
 
             if result.get("status") not in ("completed", "ok"):
@@ -141,7 +143,7 @@ class AgentWorker:
     # Internal
     # ------------------------------------------------------------------
 
-    def _poll(self) -> int:
+    async def _poll(self) -> int:
         """Single poll cycle. Returns number of tasks dispatched."""
         dispatched = 0
 
@@ -149,7 +151,7 @@ class AgentWorker:
         pending = self._task_store.find_pending()[:5]
         for task in pending:
             try:
-                if self._dispatch(task):
+                if await self._dispatch(task):
                     dispatched += 1
             except Exception as exc:
                 logger.error("Failed to dispatch task %s: %s", task.task_id, exc)
@@ -159,11 +161,11 @@ class AgentWorker:
                     pass
 
         # 2. Check for gate-resumable tasks
-        resumed = self._check_gate_resumes()
+        resumed = await self._check_gate_resumes()
 
         return dispatched + resumed
 
-    def _dispatch(self, task: Task) -> bool:
+    async def _dispatch(self, task: Task) -> bool:
         """Dispatch a single task to a matching agent.
 
         Returns True if the task was dispatched, False if no agent was available.
@@ -177,11 +179,11 @@ class AgentWorker:
         self._task_store.claim(task.task_id, agent.agent_id)
 
         if self._orchestrator and self._skill_catalog:
-            return self._dispatch_with_plan(task, agent.agent_id)
+            return await self._dispatch_with_plan(task, agent.agent_id)
 
-        return self._dispatch_simple(task, agent.agent_id)
+        return await self._dispatch_simple(task, agent.agent_id)
 
-    def _dispatch_simple(self, task: Task, agent_id: str) -> bool:
+    async def _dispatch_simple(self, task: Task, agent_id: str) -> bool:
         """Legacy dispatch: classify and execute a single skill."""
         classification = classify_task(task.description)
         self._checkpointer.save(task, phase="plan", context={
@@ -193,22 +195,19 @@ class AgentWorker:
         })
 
         self._task_store.start_executing(task.task_id)
-        executor = self._executor
-        if executor is None:
-            self._task_store.complete(task.task_id, {"note": "no executor configured; task skipped"})
-            return True
 
-        result = executor(task, classification.skill, classification.channel)
+        result = await self._executor.execute(task, classification.skill, classification.channel)
         self._checkpointer.save(task, phase="complete", context={"result": result})
         self._checkpointer.clear(task.task_id)
 
-        if result.get("status") in ("completed", "ok"):
+        if isinstance(result, dict) and result.get("status") in ("completed", "ok"):
             self._task_store.complete(task.task_id, result)
         else:
-            self._task_store.fail(task.task_id, result.get("error", result.get("output", "unknown error")))
+            error = result.get("error", result.get("output", "execution failed")) if isinstance(result, dict) else "non-dict result"
+            self._task_store.fail(task.task_id, error)
         return True
 
-    def _dispatch_with_plan(self, task: Task, agent_id: str) -> bool:
+    async def _dispatch_with_plan(self, task: Task, agent_id: str) -> bool:
         """Dispatch using SkillOrchestrator plan, creating gates for gate steps."""
         assert self._orchestrator is not None
         assert self._skill_catalog is not None
@@ -228,14 +227,10 @@ class AgentWorker:
             self._task_store.complete(task.task_id, {"note": "empty plan; no skills matched"})
             return True
 
-        if self._executor is None:
-            self._task_store.complete(task.task_id, {"note": "no executor configured; task skipped"})
-            return True
-
         # Execute steps. Gate steps create HumanGate records and pause further
         # execution until the gate is approved; the resume path is handled by
         # _check_gate_resumes in a later poll cycle.
-        results, all_succeeded, gate_index = self._execute_steps(plan.steps, task)
+        results, all_succeeded, gate_index = await self._execute_steps(plan.steps, task)
 
         if gate_index is not None:
             remaining_steps = plan.steps[gate_index + 1:]
@@ -274,7 +269,7 @@ class AgentWorker:
 
         return True
 
-    def _check_gate_resumes(self) -> int:
+    async def _check_gate_resumes(self) -> int:
         """Check executing tasks for resolved gates and resume/reject them.
 
         Returns the number of tasks that were resumed or failed.
@@ -307,16 +302,17 @@ class AgentWorker:
             # Gate was approved — resume
             approved = [g for g in resolved if g.status == GateStatus.approved]
             if approved:
-                ok = self._resume_after_gate(task)
+                ok = await self._resume_after_gate(task)
                 if ok:
                     resumed += 1
 
         return resumed
 
-    def _resume_after_gate(self, task: Task) -> bool:
+    async def _resume_after_gate(self, task: Task) -> bool:
         """Resume task execution after a gate was approved.
 
-        Loads the gate-paused checkpoint and continues executing remaining steps.
+        Loads the gate-paused checkpoint and continues executing remaining
+        steps via the executor client.
         """
         meta = self._checkpointer.restore(task)
         if meta is None or meta.get("phase") != "gate_paused":
@@ -345,11 +341,7 @@ class AgentWorker:
             for s in remaining_data
         ]
 
-        if self._executor is None:
-            self._task_store.complete(task.task_id, {"note": "no executor configured during resume; task skipped"})
-            return True
-
-        results, all_succeeded, gate_index = self._execute_steps(steps, task)
+        results, all_succeeded, gate_index = await self._execute_steps(steps, task)
 
         if gate_index is not None:
             # Hit another gate — save updated gate-pause state
@@ -388,5 +380,3 @@ class AgentWorker:
             self._task_store.complete(task.task_id, {"results": results, "status": "completed"})
 
         return True
-        """Update agent status in the registry."""
-        self._agent_registry.update_status(agent_id, status)

@@ -11,16 +11,19 @@ _api_key_warned = False
 class JinaClient:
     async def crawl(self, url: str, return_format: str = "html", timeout: int = 10, proxy: str | None = None, trust_env: bool = True) -> str:
         global _api_key_warned
+
+        if not os.getenv("JINA_API_KEY"):
+            if not _api_key_warned:
+                _api_key_warned = True
+                logger.warning("Jina API key is not set. Provide your own key to access a higher rate limit. See https://jina.ai/reader for more information.")
+            return "UNAVAILABLE: JINA_API_KEY not configured. Set JINA_API_KEY env var to use this tool."
+
         headers = {
             "Content-Type": "application/json",
             "X-Return-Format": return_format,
             "X-Timeout": str(timeout),
         }
-        if os.getenv("JINA_API_KEY"):
-            headers["Authorization"] = f"Bearer {os.getenv('JINA_API_KEY')}"
-        elif not _api_key_warned:
-            _api_key_warned = True
-            logger.warning("Jina API key is not set. Provide your own key to access a higher rate limit. See https://jina.ai/reader for more information.")
+        headers["Authorization"] = f"Bearer {os.getenv('JINA_API_KEY')}"
         data = {"url": url}
         try:
             client_kwargs: dict[str, object] = {"trust_env": trust_env}

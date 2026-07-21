@@ -26,6 +26,16 @@ def test_resolve_ddgs_region_maps_common_ddg_locale_aliases() -> None:
     assert tools._resolve_ddgs_region("\u53f0\u7063\u65b0\u805e", "tw-tzh", "auto") == "tw-zh"
 
 
+def test_default_backend_constant_is_duckduckgo() -> None:
+    """DEFAULT_BACKEND must be 'duckduckgo' after the web_search default change."""
+    assert tools.DEFAULT_BACKEND == "duckduckgo"
+
+
+def test_normalize_backend_none_returns_default_backend() -> None:
+    """_normalize_backend(None) must resolve to DEFAULT_BACKEND."""
+    assert tools._normalize_backend(None) == tools.DEFAULT_BACKEND
+
+
 def test_search_text_passes_wikipedia_safe_region_to_ddgs(monkeypatch) -> None:
     calls = {}
 
@@ -73,3 +83,42 @@ def test_web_search_tool_reads_ddgs_options_from_config() -> None:
         safesearch="off",
         backend="auto",
     )
+
+
+def test_search_text_passes_default_backend_to_ddgs(monkeypatch) -> None:
+    """_search_text must use DEFAULT_BACKEND when backend is not specified."""
+    calls = {}
+
+    class FakeDDGS:
+        def __init__(self, timeout: int) -> None:
+            calls["timeout"] = timeout
+
+        def text(self, query: str, **kwargs):
+            calls["query"] = query
+            calls.update(kwargs)
+            return [{"title": "Result", "href": "https://example.com", "body": "Snippet"}]
+
+    monkeypatch.setitem(sys.modules, "ddgs", SimpleNamespace(DDGS=FakeDDGS))
+
+    # Do NOT pass backend — rely on DEFAULT_BACKEND
+    results = tools._search_text("latest world cup news")
+
+    assert results == [{"title": "Result", "href": "https://example.com", "body": "Snippet"}]
+    assert calls["backend"] == "duckduckgo"
+
+
+def test_web_search_tool_default_backend_when_no_config() -> None:
+    """web_search_tool must fall back to DEFAULT_BACKEND when config provides no backend."""
+    with patch("deerflow.community.ddg_search.tools.get_app_config") as mock_config:
+        tool_config = MagicMock()
+        tool_config.model_extra = {}  # no backend override
+        mock_config.return_value.get_tool_config.return_value = tool_config
+
+        with patch("deerflow.community.ddg_search.tools._search_text") as mock_search:
+            mock_search.return_value = [{"title": "Result", "href": "https://example.com", "body": "Snippet"}]
+
+            tools.web_search_tool.invoke({"query": "current events", "max_results": 5})
+
+    mock_search.assert_called_once()
+    _call_kwargs = mock_search.call_args[1]
+    assert _call_kwargs["backend"] == "duckduckgo"

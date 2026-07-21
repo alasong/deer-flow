@@ -31,6 +31,7 @@ from deerflow.config.run_ownership_config import RunOwnershipConfig
 from deerflow.config.runtime_paths import existing_project_file
 from deerflow.config.safety_finish_reason_config import SafetyFinishReasonConfig
 from deerflow.config.sandbox_config import SandboxConfig
+from deerflow.config.living_agent_config import LivingAgentConfig
 from deerflow.config.scheduler_config import SchedulerConfig
 from deerflow.config.skill_evolution_config import SkillEvolutionConfig
 from deerflow.config.skill_scan_config import SkillScanConfig
@@ -207,6 +208,13 @@ class AppConfig(BaseModel):
         description=format_field_description(
             "scheduler",
             field_doc="Scheduled task runtime configuration (background poller for one-time and cron agent runs).",
+        ),
+    )
+    living_agent: LivingAgentConfig = Field(
+        default_factory=LivingAgentConfig,
+        description=format_field_description(
+            "living_agent",
+            field_doc="Living Agent system configuration: scheduler (while-loop in Gateway) + executor (separate process).",
         ),
     )
     checkpointer: CheckpointerConfig | None = Field(

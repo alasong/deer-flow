@@ -10,10 +10,11 @@ import logging
 from typing import Any
 
 from deerflow.agents.registry import AgentRegistry
+from deerflow.config.living_agent_config import LivingAgentConfig, LivingAgentExecutorConfig
 from deerflow.runtime.agent_worker import AgentWorker
 from deerflow.runtime.checkpointer.task_checkpointer import TaskCheckpointer
+from deerflow.runtime.executor_client import ExecutorClient, HttpExecutorClient, NoopExecutorClient
 from deerflow.tasks.gate_store import HumanGateStore
-from deerflow.tasks.model import Task
 from deerflow.tasks.store import TaskStore
 
 logger = logging.getLogger(__name__)
@@ -47,27 +48,34 @@ class LivingAgentService:
         checkpointer_parent: TaskCheckpointer | None = None,
         gate_store: HumanGateStore | None = None,
         poll_interval: float = 5.0,
+        config: LivingAgentConfig | None = None,
     ) -> None:
         self.registry = registry or AgentRegistry()
         self.task_store = task_store or TaskStore()
         self.gate_store = gate_store or HumanGateStore()
         self.poll_interval = poll_interval
         self._worker: AgentWorker | None = None
+        self._config = config or LivingAgentConfig()
 
         # Default checkpointer uses a simple in-memory dict store
         # (not langgraph's MemorySaver, which has a different put() signature).
         self.checkpointer = checkpointer_parent or TaskCheckpointer(_DictCheckpointerStore())
 
+        # Build the executor client based on config
+        self._executor = self._build_executor(self._config.executor)
+
     @staticmethod
-    def _default_executor(task: Task, skill: str, channel: str) -> dict[str, Any]:
-        """Default executor: logs execution and returns a completed result."""
-        logger.info("Default executor: task=%s skill=%s channel=%s", task.task_id, skill, channel)
-        return {
-            "status": "completed",
-            "output": f"default_executor:{skill}/{channel}",
-            "skill": skill,
-            "channel": channel,
-        }
+    def _build_executor(executor_cfg: LivingAgentExecutorConfig) -> ExecutorClient:
+        """Create an ExecutorClient based on the executor config."""
+        if executor_cfg.type == "http" and executor_cfg.url:
+            logger.info("Using HttpExecutorClient: url=%s", executor_cfg.url)
+            return HttpExecutorClient(
+                url=executor_cfg.url,
+                api_key=executor_cfg.api_key,
+                timeout_seconds=executor_cfg.timeout_seconds,
+            )
+        logger.info("Using NoopExecutorClient (no executor configured)")
+        return NoopExecutorClient()
 
     async def start(self) -> None:
         """Start the AgentWorker background loop."""
@@ -77,13 +85,14 @@ class LivingAgentService:
             checkpointer=self.checkpointer,
             gate_store=self.gate_store,
             poll_interval=self.poll_interval,
+            executor_client=self._executor,
         )
-        self._worker.set_executor(LivingAgentService._default_executor)
 
         await self._worker.start()
         logger.info(
-            "Living agent worker started (poll_interval=%ss, agents=%d, tasks=%d, gates=%d)",
+            "Living agent worker started (poll_interval=%ss, executor=%s, agents=%d, tasks=%d, gates=%d)",
             self.poll_interval,
+            type(self._executor).__name__,
             len(self.registry.list()),
             len(self.task_store.list()),
             len(self.gate_store.list()),

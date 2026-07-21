@@ -72,6 +72,10 @@ STARTUP_ONLY_FIELDS: dict[str, str] = {
         "RunOwnershipConfig is captured once into RunManager at langgraph_runtime() startup; the lease heartbeat background task is created and "
         "started there, and heartbeat_enabled / lease_seconds / grace_seconds are not re-read on config.yaml edits."
     ),
+    "living_agent": (
+        "LivingAgentService captures poll_interval_seconds and the executor URL/api_key at startup; "
+        "the AgentWorker background task and HttpExecutorClient are not rebuilt on config.yaml edits."
+    ),
 }
 
 

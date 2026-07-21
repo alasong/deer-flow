@@ -62,7 +62,7 @@ async def web_fetch_tool(url: str) -> str:
         proxy = _coerce_proxy(config.model_extra.get("proxy"))
         trust_env = _coerce_bool(config.model_extra.get("trust_env"), trust_env)
     html_content = await jina_client.crawl(url, return_format="html", timeout=timeout, proxy=proxy, trust_env=trust_env)
-    if isinstance(html_content, str) and html_content.startswith("Error:"):
+    if isinstance(html_content, str) and (html_content.startswith("Error:") or html_content.startswith("UNAVAILABLE:")):
         return html_content
     article = await asyncio.to_thread(readability_extractor.extract_article, html_content)
     return article.to_markdown()[:4096]

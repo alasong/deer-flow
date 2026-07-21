@@ -1706,6 +1706,30 @@ scheduler:
   min_once_delay_seconds: 60
 
 # ============================================================================
+# Living Agent Configuration
+# ============================================================================
+# Background task scheduler that runs as a while-loop inside the Gateway
+# process. Tasks are dispatched to a separate executor process (configured
+# under ``executor``) instead of running inline.
+#
+# The executor can be:
+#   type: http      — standalone FastAPI process (recommended)
+#   type: subprocess — CLI process managed by the scheduler (not yet implemented)
+#
+# Start the executor with:
+#   python -m deerflow.runtime.executor --port 8003
+#
+# living_agent:
+#   enabled: false
+#   poll_interval_seconds: 5.0
+#   executor:
+#     type: http
+#     url: http://localhost:8003
+#     # api_key: ""                # Optional auth header for scheduler→executor
+#     # timeout_seconds: 300
+#     # command: ""                # For type: subprocess
+
+# ============================================================================
 # Run Ownership Configuration
 # ============================================================================
 # Controls cross-process run ownership for multi-worker deployments.

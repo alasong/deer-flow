@@ -792,6 +792,23 @@ async def launch_scheduled_thread_run(
             ),
             cookies={},
         )
+    # Scheduled tasks run autonomously (non-interactive) and need a higher
+    # recursion_limit than interactive chat runs (default 100) because there
+    # is no human response between super-steps to break the loop. Read the
+    # scheduler-configured default and pass it as body.config so
+    # build_run_config applies it (still clamped by max_recursion_limit).
+    _scheduled_recursion_limit: int | None = None
+    if app is not None:
+        try:
+            from deerflow.config import get_app_config
+            _cfg = get_app_config()
+            if _cfg.scheduler is not None:
+                _scheduled_recursion_limit = _cfg.scheduler.default_recursion_limit
+        except Exception:
+            pass
+    _run_config: dict[str, Any] | None = None
+    if _scheduled_recursion_limit is not None:
+        _run_config = {"recursion_limit": _scheduled_recursion_limit}
     # SimpleNamespace stands in for the Pydantic run-request body that the
     # HTTP path parses. If start_run gains a new body.* attribute that it reads
     # directly, add the matching field here so the scheduler path stays in sync.
@@ -800,7 +817,7 @@ async def launch_scheduled_thread_run(
         input={"messages": [{"role": "user", "content": prompt}]},
         command=None,
         metadata=metadata or {},
-        config=None,
+        config=_run_config,
         # ``user_id`` mirrors what IM channels put in ``body.context`` so
         # runtime-context consumers without a ContextVar fallback (e.g.
         # user-scoped GuardrailMiddleware providers) see the owning user;

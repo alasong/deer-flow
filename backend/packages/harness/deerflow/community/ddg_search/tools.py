@@ -11,7 +11,7 @@ from deerflow.config import get_app_config
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_BACKEND = "auto"
+DEFAULT_BACKEND = "duckduckgo"
 DEFAULT_REGION = "wt-wt"
 DEFAULT_SAFESEARCH = "moderate"
 DEFAULT_WIKIPEDIA_REGION = "us-en"
