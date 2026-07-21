@@ -638,14 +638,23 @@ tool_groups:
 # Configure available tools for the agent to use
 
 tools:
-  # Web search tool (uses DuckDuckGo, no API key required)
+  # Web search tool (uses Metaso AI Search / 秘塔AI搜索, requires METASO_API_KEY)
+  # Metaso provides AI-powered web search results from a Chinese search engine.
+  # Sign up at https://metaso.cn to get an API key (starts with `mk-`).
+  # Pricing: ~¥0.03 per query, new accounts get 5000 free queries.
   - name: web_search
     group: web
-    use: deerflow.community.ddg_search.tools:web_search_tool
+    use: deerflow.community.metaso.tools:web_search_tool
     max_results: 5
-    # backend: auto          # DDGS backend(s): auto, duckduckgo, brave, wikipedia, etc.
-    # region: wt-wt          # wt-wt is normalized for Wikipedia when backend includes auto/all/wikipedia.
-    # safesearch: moderate   # on, moderate, off
+
+  # Web search tool (uses DuckDuckGo, no API key required)
+  # - name: web_search
+  #   group: web
+  #   use: deerflow.community.ddg_search.tools:web_search_tool
+  #   max_results: 5
+  #   # backend: auto          # DDGS backend(s): auto, duckduckgo, brave, wikipedia, etc.
+  #   # region: wt-wt          # wt-wt is normalized for Wikipedia when backend includes auto/all/wikipedia.
+  #   # safesearch: moderate   # on, moderate, off
 
   # Web search tool (uses SearXNG, self-hosted, no API key required)
   # SearXNG is a free internet metasearch engine which aggregates results from
