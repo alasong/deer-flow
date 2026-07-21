@@ -48,6 +48,35 @@ class TestLivingAgentService:
         assert service.registry.get("agent.dev") is not None
         assert service.task_store.get("t1") is not None
 
+    async def test_default_executor_processes_task(self):
+        """Default executor should process a task to completion via worker poll."""
+        import asyncio
+
+        from app.gateway.living_agent import LivingAgentService
+        from deerflow.agents.model import Agent
+        from deerflow.tasks.model import Task
+
+        service = LivingAgentService(poll_interval=0.1)
+
+        service.registry.register(Agent(
+            agent_id="agent.test",
+            name="Test Agent",
+            capabilities=["test.run"],
+        ))
+        service.task_store.put(Task(
+            task_id="t1",
+            capability="test",
+            description="Run a test task",
+        ))
+
+        await service.start()
+        await asyncio.sleep(0.3)  # Allow worker to poll
+        await service.stop()
+
+        task = service.task_store.get("t1")
+        assert task is not None
+        assert task.status.value == "completed", f"Expected completed, got {task.status.value}"
+
     def test_router_setup_integration(self):
         """LivingAgentService stores should be usable by the agent_tasks router."""
         from app.gateway.routers import agent_tasks as at_module

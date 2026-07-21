@@ -12,6 +12,7 @@ from app.gateway.config import get_gateway_config
 from app.gateway.csrf_middleware import CSRFMiddleware, get_configured_cors_origins
 from app.gateway.deps import langgraph_runtime
 from app.gateway.routers import (
+    agent_tasks,
     agents,
     artifacts,
     assistants_compat,
@@ -274,14 +275,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         # Start living agent worker (AgentRegistry, TaskStore, HumanGateStore, etc.)
         try:
-            from app.gateway import agent_tasks as agent_tasks_router
             from app.gateway.living_agent import LivingAgentService
 
             living_agent = LivingAgentService(poll_interval=5.0)
             await living_agent.start()
 
             # Wire stores into the agent_tasks router so API endpoints can access them
-            agent_tasks_router.setup(
+            agent_tasks.setup(
                 registry=living_agent.registry,
                 task_store=living_agent.task_store,
                 checkpointer=living_agent.checkpointer,
@@ -536,6 +536,9 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
 
     # Agents API is mounted at /api/agents
     app.include_router(agents.router)
+
+    # Living Agent API (agent CRUD, task lifecycle, human gates)
+    app.include_router(agent_tasks.router)
 
     # Suggestions API is mounted at /api/threads/{thread_id}/suggestions
     app.include_router(suggestions.router)
