@@ -8,10 +8,29 @@ __all__ = [
     "make_lead_agent",
     "SandboxState",
     "ThreadState",
+    "Agent",
+    "AgentStatus",
+    "AgentAccessLevel",
+    "AgentRegistry",
 ]
 
 
 def __getattr__(name: str):
+    if name in {"Agent", "AgentStatus", "AgentAccessLevel"}:
+        from .model import Agent, AgentAccessLevel, AgentStatus
+
+        exports = {
+            "Agent": Agent,
+            "AgentStatus": AgentStatus,
+            "AgentAccessLevel": AgentAccessLevel,
+        }
+        globals().update(exports)
+        return exports[name]
+    if name == "AgentRegistry":
+        from .registry import AgentRegistry
+
+        globals()["AgentRegistry"] = AgentRegistry
+        return AgentRegistry
     if name == "create_deerflow_agent":
         from .factory import create_deerflow_agent
 
