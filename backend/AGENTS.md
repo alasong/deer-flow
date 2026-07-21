@@ -274,297 +274,88 @@ tool graph or subagent executor during state/schema imports.
 
 ### Middleware Chain
 
-Lead-agent middlewares are assembled in strict order across three functions: the shared base in `packages/harness/deerflow/agents/middlewares/tool_error_handling_middleware.py` (`_build_runtime_middlewares`, exposed via `build_lead_runtime_middlewares`), then the lead-only middlewares appended in `packages/harness/deerflow/agents/lead_agent/agent.py` (`build_middlewares`). Items marked *(optional)* are appended only when their config/runtime condition holds, so the live chain length varies.
+33 middlewares assembled in strict order: a shared runtime base (13 for lead +
+subagent) + lead-only extensions (20 for lead only). Items marked *(optional)*
+are gated by config or runtime conditions.
 
-**Shared runtime base** (`build_lead_runtime_middlewares`; subagents reuse most of this via `build_subagent_runtime_middlewares`):
+→ Full documentation: [docs/middleware-chain.md](docs/middleware-chain.md)
 
-1. **InputSanitizationMiddleware** - First, so it is the outermost `wrap_model_call` wrapper; every inner middleware (including LLM retries) sees sanitized messages. `additional_kwargs.original_user_content` is server-owned provenance: Gateway strips caller-supplied values for non-internal run requests, trusted IM calls may carry the string they captured before adding transport/file context, and the middleware replaces any non-string value before wrapping. Uploads and sanitization retain first-writer-wins only for validated strings.
-2. **ToolOutputBudgetMiddleware** - Caps tool output size (per app config) before it re-enters the model context
-3. **ToolResultSanitizationMiddleware** - Neutralizes framework/injection tags (e.g. `<system-reminder>`) and boundary markers in *remote-content* tool results (`web_fetch`/`web_search`/`image_search`/`web_capture`) so attacker-controlled fetched pages cannot forge trusted framework context. Mirrors `InputSanitizationMiddleware`'s user-input guardrail for the other untrusted-content entry point; sits inner of `ToolOutputBudgetMiddleware` (neutralizes the raw output, then the budget truncates). Local tool output (bash/read_file) is left untouched. Scope is a name-based allowlist, so MCP remote-content tools registered under other names (e.g. `fetch_url`) are not yet covered — a metadata-tagging follow-up is tracked in the middleware source
-4. **ThreadDataMiddleware** - Creates per-thread directories under the user's isolation scope (`backend/.deer-flow/users/{user_id}/threads/{thread_id}/user-data/{workspace,uploads,outputs}`); resolves `user_id` via `get_effective_user_id()` (falls back to `"default"` in no-auth mode)
-5. **UploadsMiddleware** - Tracks and injects newly uploaded files into conversation (lead agent only)
-6. **SandboxMiddleware** - Acquires sandbox, stores `sandbox_id` in state
-7. **DanglingToolCallMiddleware** - Injects placeholder ToolMessages for AIMessage tool_calls that lack responses (e.g., user interruption), preserving raw provider tool-call payloads in `additional_kwargs["tool_calls"]`; malformed tool-call names and arguments are sanitized in the model-bound request so strict OpenAI-compatible providers do not reject the next request
-8. **LLMErrorHandlingMiddleware** - Normalizes provider/model invocation failures into recoverable assistant-facing errors before later stages run
-9. **GuardrailMiddleware** - *(optional, if `guardrails.enabled`)* Pre-tool-call authorization via pluggable `GuardrailProvider`; returns an error ToolMessage on deny. Providers: built-in `AllowlistProvider` (zero deps), OAP policy providers (e.g. `aport-agent-guardrails`), or custom. See [docs/GUARDRAILS.md](docs/GUARDRAILS.md)
-10. **SandboxAuditMiddleware** - Audits sandboxed shell/file operations for security logging before tool execution
-11. **ReadBeforeWriteMiddleware** - *(optional, if `read_before_write.enabled`, default on)* Outermost write gate (issue #3857): `read_file` stamps a content hash onto its ToolMessage; `write_file` (append/overwrite-existing) and `str_replace` are blocked unless the newest mark for that path matches the file's current hash. Sits outside ToolProgressMiddleware and ToolErrorHandlingMiddleware so a blocked write returns immediately without consuming a ToolProgress slot. Blocked results call `normalize_tool_result` directly to stamp `deerflow_tool_meta` (`recoverable_by_model=True`) before returning, keeping the result well-formed for any outer consumer. Marks live on messages, so summarization dropping the read result invalidates the gate automatically; writes never refresh marks, forcing a re-read between consecutive edits. Gate check + tool execution are serialized per (thread, path) so same-turn parallel writes cannot reuse one stale mark; on sandboxes whose `read_file` reports failures as `"Error: ..."` strings instead of raising (AIO/E2B), uninspectable targets fail open (creation proceeds, no mark stamped)
-12. **ToolProgressMiddleware** - *(optional, if `tool_progress.enabled`)* State-machine-based stagnation guard (RFC #3177). Outer wrapper around ToolErrorHandlingMiddleware so its `wrap_tool_call` receives results already stamped with `deerflow_tool_meta`. Tracks per-(thread, tool) consecutive "no-new-info" calls across three error categories: (a) `recoverable_by_model=True` (no_results, not_found, permission, Jaccard-duplicate success): ACTIVE → WARNED (terminal — hint re-injected on each subsequent problem); (b) `recoverable_by_model=False, action≠stop` (rate_limited, transient): ACTIVE → WARNED → BLOCKED after `warn_escalation_count` more problems; (c) `recoverable_by_model=False, action=stop` (auth, config, internal): immediately BLOCKED on first occurrence. **Division of labor with LoopDetectionMiddleware:** ToolProgressMiddleware is a result-quality guard — fires after tool execution and blocks specific tools that stop producing new information; LoopDetectionMiddleware is a call-pattern guard — fires after the model responds and hard-stops the whole turn when the model repeatedly issues identical tool_calls. Both can inject HumanMessage hints in the same model call without conflict; neither reads the other's internal state.
-13. **ToolErrorHandlingMiddleware** - Receives `AppConfig`, converts tool exceptions into error `ToolMessage`s so the run can continue instead of aborting, stamps every result with `deerflow_tool_meta` (status / error_type / recoverable_by_model / recommended_next_action / source) via `tool_result_meta.normalize_tool_result`, stamps structured metadata for task exception wrappers, and stamps skill-read metadata for downstream durable-context capture. Task tool result text is generated from the same status/result/error inputs as the structured metadata so callers do not hand-write a second protocol string.
+**Shared runtime base** (`build_lead_runtime_middlewares`):
+#1 InputSanitization · #2 ToolOutputBudget · #3 ToolResultSanitization ·
+#4 ThreadData · #5 Uploads (lead only) · #6 Sandbox · #7 DanglingToolCall ·
+#8 LLMErrorHandling · #9 Guardrail *(optional)* · #10 SandboxAudit ·
+#11 ReadBeforeWrite *(optional)* · #12 ToolProgress *(optional)* ·
+#13 ToolErrorHandling
 
-Authorization identity plumbing is independent of whether authorization enforcement is enabled. Gateway removes client-supplied `is_internal` / `authz_attributes` / `channel_user_id`, derives `is_internal` only from the server-owned `request.state.auth_source`, and accepts `channel_user_id` only from an internally authenticated IM caller's top-level `body.context`; free-form `body.config` can never supply it. `build_principal_from_context` is the shared Principal builder for assembly-time authorization and `GuardrailAuthorizationAdapter`; it applies `default_role`, strict-boolean internal provenance, and copy-on-read `authz_attributes`. Task delegation carries `is_internal` plus copied attributes through `SubagentExecutor`, while `GuardrailMiddleware` maps the same runtime fields into `GuardrailRequest`. Phase 1A provides this trusted identity chain only; automatic Layer 1 filtering and Layer 2 authorization middleware wiring remain separate enforcement work.
+**Lead-only** (`build_middlewares`, appended after base):
+#14 DynamicContext · #15 SkillActivation · #16 SkillToolPolicy ·
+#17 DurableContext · #18 Summarization *(optional)* · #19 TodoList *(optional)* ·
+#20 TokenUsage *(optional)* · #21 Title · #22 Memory · #23 ViewImage *(optional)* ·
+#24 McpRouting *(optional)* · #25 DeferredToolFilter *(optional)* ·
+#26 SystemMessageCoalescing · #27 SubagentLimit *(optional)* ·
+#28 LoopDetection *(optional)* · #29 TokenBudget *(optional)* ·
+#30 Custom *(optional)* · #31 TerminalResponse ·
+#32 SafetyFinishReason *(optional)* · #33 Clarification (must be last)
 
-Before changing a later authorization phase, read the [authorization RFC](../docs/plans/2026-07-10-pluggable-authorization-rfc.md) and its [implementation notes](../docs/plans/2026-07-10-pluggable-authorization-implementation-notes.md). The notes are the cumulative handoff record for merged PR behavior, reviewer feedback, trust-boundary decisions, deferred scope, and required regression coverage.
+**Authorization identity plumbing** removes client-supplied `is_internal` /
+`authz_attributes` / `channel_user_id`; derives `is_internal` from server-owned
+`request.state.auth_source` only. `build_principal_from_context` is the shared
+Principal builder. Before changing authorization, read the
+[authorization RFC](../docs/plans/2026-07-10-pluggable-authorization-rfc.md) and
+[implementation notes](../docs/plans/2026-07-10-pluggable-authorization-implementation-notes.md).
 
-**Lead-only middlewares** (`build_middlewares`, appended after the base):
-
-14. **DynamicContextMiddleware** - Injects the current date (and optionally memory) as a `<system-reminder>` into the first HumanMessage, keeping the base system prompt fully static for prefix-cache reuse
-15. **SkillActivationMiddleware** - Detects strict `/skill-name task` syntax on the latest real user message, resolves only enabled and runtime-allowed skills, injects the `SKILL.md` body as hidden current-turn context, and records a `middleware:skill_activation` audit event
-16. **SkillToolPolicyMiddleware** - Applies `allowed-tools` only after real activation; passive enabled skills and a custom agent's configured skill allowlist do not clamp the lead toolset. A run-scoped slash activation is authoritative and suppresses `skill_context` as a policy source, so reading another skill cannot widen the explicit skill's tools; without slash activation, skills captured after configured `read_file` loads retain the existing union semantics. The middleware filters model-visible schemas and blocks unauthorized execution, resolving canonical paths against the live enabled/agent-allowed registry on every model call, then stores a versioned, JSON-safe, middleware-token-bound decision signed by policy source plus active paths in run context for the resulting tool calls to reuse. The next model call always refreshes it, and malformed, foreign, stale, or unmatched decisions fall back to live resolution. `tool_search` and `describe_skill` remain framework-safe discovery tools under a restrictive policy; they may reveal or promote metadata, but a deferred business tool must still be declared by the active policy before its schema or execution can survive the policy middleware. The decision's owner token is authorization-sensitive, so its reserved context key is owned by `runtime.secret_context` and included in `REDACTED_CONTEXT_KEYS` for observable and persisted context copies. Registry load failures and a non-empty active set with no authorized skill fail closed to framework-safe tools; an individual stale path is skipped only when at least one valid active skill remains. This is best-effort behavioral scoping rather than a hard security boundary: alternate loads such as `bash cat` are not captured, and bounded autonomous `skill_context` can evict old entries. `task` is not framework-exempt, so a restricted skill cannot delegate around its policy. The middleware must remain immediately after `SkillActivationMiddleware` (which publishes the slash source through `runtime.secret_context`'s public path helpers authenticated by a required token shared only within the assembled middleware chain) and immediately before `DurableContextMiddleware`; assembly and compiled-graph tests pin ordering, token sharing, schema filtering, and execution blocking.
-17. **DurableContextMiddleware** - Captures `task` delegations into `ThreadState.delegations` (including in-progress dispatches and terminal result summaries) and loaded skill-file references (name/path/description, parsed in-memory - not the body) into `ThreadState.skill_context` before summarization can compact the paired tool-call/result messages, then projects durable context into each model request. Static authority rules are injected as a `SystemMessage`; untrusted field values (`summary_text`, delegation results, skill descriptions) are injected separately as a hidden `HumanMessage` data block so compressed history, delegated work, and which skills are active stay visible without being stored as `messages` or promoted to system-role instructions. `build_subagent_runtime_middlewares` also attaches this middleware immediately before subagent summarization so a compacted `summary_text` is projected ahead of a preserved assistant/tool tail instead of leaving strict providers with an assistant-first request.
-18. **SummarizationMiddleware** - *(optional, if enabled)* Context reduction when approaching token limits
-19. **TodoListMiddleware** - *(optional, if `is_plan_mode`)* Task tracking with the `write_todos` tool
-20. **TokenUsageMiddleware** - *(optional, if `token_usage.enabled`)* Records token usage metrics; subagent usage is merged back into the dispatching AIMessage by message position
-21. **TitleMiddleware** - Auto-generates the thread title after the first complete exchange and normalizes structured message content before prompting the title model. If a first-turn run is interrupted before this middleware can write a title, `runtime/runs/worker.py` keeps the run in a finalizing state, persists a local fallback title from the latest checkpoint or original run input, and then syncs it to `threads_meta.display_name`. Replacement runs admitted by `multitask_strategy="interrupt"` / `"rollback"` wait for older same-thread finalization before entering the graph; the interrupted run only skips the fallback title write once a later run has started and may have advanced the checkpoint.
-22. **MemoryMiddleware** - Queues conversations for async memory update (filters to user + final AI responses)
-23. **ViewImageMiddleware** - *(optional, if the model supports vision)* Injects base64 image data before the LLM call
-24. **McpRoutingMiddleware** - *(optional, if `tool_search.enabled` and PR1 MCP routing metadata produce a routing index)* Auto-promotes matching deferred MCP tool schemas before the model call by writing a minimal `promoted` state update. It matches only the latest real `HumanMessage`, uses the global `tool_search.auto_promote_top_k` limit (default 3, clamped to 1..5), never executes tools, and must be installed before `DeferredToolFilterMiddleware`
-25. **DeferredToolFilterMiddleware** - *(optional, if `tool_search.enabled`)* Hides deferred (MCP) tool schemas from the bound model until `tool_search` or `McpRoutingMiddleware` promotes them (reads per-thread promotions from `ThreadState.promoted`, hash-scoped)
-26. **SystemMessageCoalescingMiddleware** - Merges every SystemMessage into a single leading SystemMessage per request; provider-agnostic fix for strict backends (vLLM/SGLang/Qwen/Anthropic) that reject non-leading system messages. Touches the per-request payload only (checkpoint state unchanged); on midnight crossings only the latest `dynamic_context_reminder` SystemMessage survives
-27. **SubagentLimitMiddleware** - *(optional, if `subagent_enabled`)* Truncates excess `task` tool calls to enforce both the per-response concurrency limit (`max_concurrent_subagents`, clamped to 2-4) and the per-run total delegation cap (`max_total_subagents` runtime override or `subagents.max_total_per_run`, default 6, clamped to 1-50). The total cap counts current-run entries in the durable delegation ledger (entries are tagged with `run_id` when captured), so repeated planning checkpoints in one run cannot keep launching legal-sized batches indefinitely, while later user turns in the same thread get a fresh run budget. If the cap is exhausted, the middleware strips remaining `task` calls, forces `finish_reason="stop"`, and appends a visible limit note so the run can synthesize existing results instead of ending with an empty tool-call response.
-28. **LoopDetectionMiddleware** - *(optional, if `loop_detection.enabled`)* Detects repeated tool-call loops; hard-stop clears both structured `tool_calls` and raw provider tool-call metadata before forcing a final text answer; stamps `loop_capped` via `consume_stop_reason` (#3875 Phase 2), symmetric to `TokenBudgetMiddleware`
-29. **TokenBudgetMiddleware** - *(optional, if `token_budget.enabled`)* Enforces per-run token limits
-30. **Custom middlewares** - *(optional)* Any `custom_middlewares` passed to `build_middlewares` are injected here, before the terminal-response/safety/clarification tail
-31. **TerminalResponseMiddleware** - When a provider returns an empty terminal `AIMessage` after tool execution, injects a hidden recovery prompt and retries the model once; a second empty response is replaced in checkpoint state by a visible error fallback marked for the run worker, so the run finishes as an error instead of a silent success
-32. **SafetyFinishReasonMiddleware** - *(optional, if `safety_finish_reason.enabled`)* Suppresses tool execution when the provider safety-terminated the response (e.g. `finish_reason=content_filter`); registered after terminal-response/custom middlewares so LangChain's reverse-order `after_model` dispatch runs it first
-33. **ClarificationMiddleware** - Intercepts `ask_clarification` tool calls, writes a readable `ToolMessage.content` fallback plus structured `ToolMessage.artifact.human_input` request payload, and interrupts via `Command(goto=END)` (must be last). Because this middleware can short-circuit tool execution before LangChain emits `on_tool_end`, `RunJournal` performs a root-run final reconciliation for allowlisted clarification `ToolMessage`s whose `tool_call_id` was produced by the current run, so human-input request cards remain recoverable from `run_events` after checkpoint compaction. Human Input Card replies are submitted as `hide_from_ui` `HumanMessage`s with `additional_kwargs.human_input_response`; `RunJournal` persists only allowlisted hidden response sources (currently `ask_clarification`) as `llm.human.input`, which preserves answered-card state after compaction without exposing generic internal hidden context.
+Also see [docs/middleware-execution-flow.md](docs/middleware-execution-flow.md) for
+the Chinese-language execution-flow diagram and subagent middleware set.
 
 ### Living Agent System
 
-The Living Agent system provides a background task execution framework — agents
-register their capabilities, clients submit tasks, and a background worker
-dispatches and executes them. It is **independent** of the Lead Agent graph
-runtime: tasks run via a pluggable executor callback, not LangGraph.
+Background task execution framework: agents register capabilities, clients submit
+tasks, a background worker dispatches and executes them. Independent of the Lead
+Agent graph runtime.
 
-**Module map:**
+→ Full documentation: [docs/living-agent-system.md](docs/living-agent-system.md)
 
-| Module | Path | Role |
-|--------|------|------|
-| Agent model | `deerflow/agents/model.py` | `Agent` dataclass (id, capabilities, status, access_level) |
-| AgentRegistry | `deerflow/agents/registry.py` | Agent CRUD + capability prefix routing |
-| Task model | `deerflow/tasks/model.py` | `Task` dataclass + pure lifecycle transitions |
-| TaskStore | `deerflow/tasks/store.py` | Thread-safe task queue + file persistence |
-| Classifier | `deerflow/tasks/classifier.py` | Keyword-based task → skill/channel mapping |
-| Orchestrator | `deerflow/tasks/orchestrator.py` | Execution plan generation with gate steps |
-| HumanGate | `deerflow/tasks/gate.py` | Gate model + approve/reject lifecycle |
-| HumanGateStore | `deerflow/tasks/gate_store.py` | Gate CRUD + file persistence |
-| TaskCheckpointer | `deerflow/runtime/checkpointer/task_checkpointer.py` | Checkpoint save/restore for task state |
-| AgentWorker | `deerflow/runtime/agent_worker.py` | Background poll loop + dispatch + gate resume |
-| LivingAgentService | `app/gateway/living_agent.py` | Wires worker into Gateway lifespan |
-| AgentTasks Router | `app/gateway/routers/agent_tasks.py` | REST API (agents, tasks, gates) |
+**Module map:** `Agent` model (`deerflow/agents/model.py`) · `AgentRegistry` (`deerflow/agents/registry.py`) · `Task` model (`deerflow/tasks/model.py`) · `TaskStore` (`deerflow/tasks/store.py`) · `Classifier` (`deerflow/tasks/classifier.py`) · `Orchestrator` (`deerflow/tasks/orchestrator.py`) · `HumanGate` (`deerflow/tasks/gate.py`) · `HumanGateStore` (`deerflow/tasks/gate_store.py`) · `TaskCheckpointer` (`deerflow/runtime/checkpointer/task_checkpointer.py`) · `AgentWorker` (`deerflow/runtime/agent_worker.py`) · `LivingAgentService` (`app/gateway/living_agent.py`) · `AgentTasks Router` (`app/gateway/routers/agent_tasks.py`)
 
-#### Lifecycle
+**Lifecycle:** `pending → claimed → executing → completed | failed`. Tasks are submitted via REST API, matched to agents by capability prefix routing, and executed by a pluggable callback. Human-in-the-loop gates pause execution for approval via `POST /api/agents/gates/{id}/approve|reject`.
 
-A task flows through the system as follows:
+**REST API** (all at `/api/agents`):
+- Agents: `GET/POST /agents`, `GET/DELETE /agents/{id}`
+- Tasks: `GET/POST /tasks`, `GET /tasks/{id}`, `POST /tasks/{id}/claim`, `POST /tasks/{id}/cancel`
+- Gates: `GET /gates`, `GET /gates/{id}`, `POST /gates/{id}/approve`, `POST /gates/{id}/reject`
 
-```
-Client → POST /api/agents/tasks → TaskStore (pending)
-                                          ↓
-AgentWorker._poll() → find_pending()      ↓
-                                          ↓
-AgentRegistry.find_by_capability() → claim → classify / orchestrate
-                                          ↓
-                               Executor(task, skill, channel)
-                                          ↓
-                                 complete() or fail()
-```
+**Wiring:** `LivingAgentService` in `app.py` lifespan owns shared stores and manages worker start/stop. Stores wired to `app.state` for `Depends()` DI in router endpoints.
 
-#### Agent Model
-
-`Agent` has four lifecycle statuses: `idle`, `active`, `paused`, `disabled`.
-Each agent declares a list of `capabilities` for routing. Task capabilities
-are matched against agent capabilities via **prefix match**: an agent whose
-capability starts with the task's requirement can handle it (e.g. agent has
-`"dev.code"`, task requests `"dev"` → match). This allows hierarchical
-categorization: an agent specialized in `"dev.code"` can handle general
-`"dev"` tasks but not `"dev.ops"` tasks.
-
-Capability routing is implemented in `agent_matches_capability()`:
-
-```python
-def agent_matches_capability(agent: Agent, capability: str) -> bool:
-    return any(cap.startswith(capability) for cap in agent.capabilities)
-```
-
-#### Task Lifecycle
-
-Tasks progress through: `pending → claimed → executing → completed | failed`
-Cancellation is allowed from `pending` or `claimed`.
-
-Transitions are pure functions (`transition_claim`, `transition_execute`,
-`transition_complete`, `transition_fail`, `transition_cancel`) — they raise
-`ValueError` on invalid state transitions. `TaskStore` wraps each transition
-with thread-safe locking and optional file persistence.
-
-#### AgentWorker
-
-The `AgentWorker` is an async background loop:
-
-- **Poll cycle**: Every `poll_interval` seconds, calls `_poll()` which:
-  1. Fetches up to 5 pending tasks via `find_pending()`
-  2. Matches each to an idle agent via `find_by_capability()`
-  3. Dispatches via `_dispatch_simple()` (classify + execute) or
-     `_dispatch_with_plan()` (orchestrator plan with optional gate steps)
-  4. Checks for gate-resumable tasks via `_check_gate_resumes()`
-
-- **Dispatch paths**:
-  - `_dispatch_simple`: Uses `classify_task()` for skill/channel, executes once
-  - `_dispatch_with_plan`: Uses `SkillOrchestrator` to build an `ExecutionPlan`
-    with multiple steps + optional `HumanGate` checkpoints
-
-- **Executor callback**: Set via `set_executor(callable)`. The callable receives
-  `(task, skill, channel)` and returns `dict[str, Any]` with `status` (must be
-  `"completed"` or `"ok"` for success). `LivingAgentService.start()` sets a
-  default executor that logs and returns a completed result.
-
-#### Human-in-the-loop Gates
-
-Gates pause execution between steps for human approval:
-
-1. `SkillOrchestrator.plan(description, catalog, human_review=True)` inserts
-   `PlanStepKind.gate` steps into the execution plan
-2. `AgentWorker._execute_steps()` encounters a gate step → creates a
-   `HumanGate` record in `HumanGateStore` → pauses (saves remaining steps
-   to checkpointer as `gate_paused` phase)
-3. External consumers approve/reject via
-   `POST /api/agents/gates/{id}/approve` or `.../reject`
-4. Next poll cycle: `_check_gate_resumes()` detects resolved gates →
-   `_resume_after_gate()` loads checkpoint and continues remaining steps
-5. Rejection fails the task; multiple gates are supported (each creates a
-   new `gate_paused` checkpoint)
-
-#### REST API
-
-All endpoints are mounted at `/api/agents`:
-
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/api/agents/agents` | GET/POST | List/create agents |
-| `/api/agents/agents/{id}` | GET/DELETE | Get/delete an agent |
-| `/api/agents/tasks` | GET/POST | List/submit tasks |
-| `/api/agents/tasks/{id}` | GET | Get task status |
-| `/api/agents/tasks/{id}/claim` | POST | Claim a task |
-| `/api/agents/tasks/{id}/cancel` | POST | Cancel a task |
-| `/api/agents/gates` | GET | List gates (filterable) |
-| `/api/agents/gates/{id}` | GET | Get gate details |
-| `/api/agents/gates/{id}/approve` | POST | Approve a gate |
-| `/api/agents/gates/{id}/reject` | POST | Reject a gate |
-
-#### Gateway Wiring
-
-`LivingAgentService` wires everything into the Gateway lifespan:
-
-```python
-# In app.py lifespan:
-living_agent = LivingAgentService(poll_interval=5.0)
-await living_agent.start()                # starts worker + sets default executor
-agent_tasks.setup(...)                     # wires stores into router globals
-```
-
-`LivingAgentService` owns the shared stores (`AgentRegistry`, `TaskStore`,
-`HumanGateStore`, `TaskCheckpointer`) and manages the worker's start/stop
-lifecycle. The default checkpointer backend is a simple in-memory dict store
-(rather than LangGraph's `MemorySaver`, whose `put()` signature is
-incompatible with `TaskCheckpointer`'s call protocol).
-
-#### Testing
-
-All tests are in `backend/tests/`:
-
-| File | Tests | Scope |
-|------|-------|-------|
-| `test_agent_worker.py` | 24 | Worker poll/dispatch/gates/resume |
-| `test_agent_tasks_router.py` | 29 | REST API endpoints |
-| `test_living_agent.py` | 5 | Service lifecycle + default executor |
-| `test_app.py` | 2 | Router registration + integration |
+**Tests:** `test_agent_worker.py` (24) · `test_agent_tasks_router.py` (29) · `test_living_agent.py` (5) · `test_app.py` (2)
 
 ### Configuration System
 
-**Main Configuration** (`config.yaml`):
+**Main Configuration** (`config.yaml` at project root). See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for full detail.
 
-Setup: Copy `config.example.yaml` to `config.yaml` in the **project root** directory.
+**Config Versioning:** `config.example.yaml` has `config_version`. `AppConfig.from_file()` warns on mismatch; run `make config-upgrade` to merge new fields. Bump `config_version` when changing schema.
 
-**Config Versioning**: `config.example.yaml` has a `config_version` field. On startup, `AppConfig.from_file()` compares user version vs example version and emits a warning if outdated. Missing `config_version` = version 0. Run `make config-upgrade` to auto-merge missing fields. When changing the config schema, bump `config_version` in `config.example.yaml`.
+**Config Hot-Reload Boundary:** Gateway reads `get_app_config()` per-request, so per-run fields (`models`, `summarization`, `memory`, `subagents`, `tools`, system prompt) pick up edits on the next message. Infrastructure fields (`database`, `checkpointer`, `sandbox`, `log_level`, `channels`, `scheduler`, `run_ownership`) are **restart-required** — see `STARTUP_ONLY_FIELDS` in `config/reload_boundary.py`, pinned by `tests/test_reload_boundary.py`.
 
-**Config Caching**: `get_app_config()` caches the parsed config, but automatically reloads it when the resolved config path or file content signature changes. The signature includes file metadata and a content digest, so Gateway and LangGraph reads stay aligned with `config.yaml` edits even on object-store or network mounts where mtime can remain stale.
+**Persistence backend:** unified `database` section selects LangGraph checkpointer, Store, and DeerFlow SQL repos. Deprecated `checkpointer` section overrides `database` for LangGraph only (backward compat).
 
-**Config Hot-Reload Boundary**: Gateway dependencies route through `get_app_config()` on every request, so per-run fields like `models[*].max_tokens`, `summarization.*`, `title.*`, `memory.*`, `subagents.*`, `tools[*]`, and the agent system prompt pick up `config.yaml` edits on the next message. `AppConfig` is intentionally **not** cached on `app.state` — `lifespan()` keeps a local `startup_config` variable for one-shot bootstrap work and passes it to `langgraph_runtime(app, startup_config)`.
+**Config priority:** explicit `config_path` > `DEER_FLOW_CONFIG_PATH` env > `config.yaml` in backend/ > `config.yaml` in project root. `$VALUE` resolved as env var.
 
-Infrastructure fields are **restart-required**. The authoritative list lives in `packages/harness/deerflow/config/reload_boundary.py::STARTUP_ONLY_FIELDS` and is mirrored by the standardised `"startup-only:"` prefix on the corresponding `Field(description=...)` in `AppConfig`, so IDE hover on those fields surfaces the reason inline (no need to context-switch into this table). Currently registered: `database`, `checkpointer`, `run_events`, `stream_bridge`, `sandbox`, `log_level`, `logging`, `channels`, `channel_connections`, `scheduler`, `run_ownership`. Adding a new restart-required field requires updating the registry; drift is pinned by `tests/test_reload_boundary.py`.
-
-**Persistence backend resolution**: the unified `database` section selects the
-Gateway's LangGraph checkpointer, LangGraph Store, and DeerFlow SQL repositories.
-The deprecated `checkpointer` section remains backward compatible and, when
-present, overrides `database` for the LangGraph checkpointer and Store only;
-application repositories continue to use `database`.
-
-Configuration priority:
-1. Explicit `config_path` argument
-2. `DEER_FLOW_CONFIG_PATH` environment variable
-3. `config.yaml` in current directory (backend/)
-4. `config.yaml` in parent directory (project root - **recommended location**)
-
-Config values starting with `$` are resolved as environment variables (e.g., `$OPENAI_API_KEY`).
-`ModelConfig` also declares `use_responses_api` and `output_version` so OpenAI `/v1/responses` can be enabled explicitly while still using `langchain_openai:ChatOpenAI`.
-
-**Extensions Configuration** (`extensions_config.json`):
-
-MCP servers and skills are configured together in `extensions_config.json` in project root:
-
-Docker development mounts the project directory at `/app/project` and points
-`DEER_FLOW_CONFIG_PATH` / `DEER_FLOW_EXTENSIONS_CONFIG_PATH` into that directory.
-Keep mutable config files behind a directory bind mount: single-file bind mounts
-can become stale or inaccessible when a host editor replaces a file on save.
-
-Configuration priority:
-1. Explicit `config_path` argument
-2. `DEER_FLOW_EXTENSIONS_CONFIG_PATH` environment variable
-3. `extensions_config.json` in current directory (backend/)
-4. `extensions_config.json` in parent directory (project root - **recommended location**)
-
-Extensions are optional only in the fallback *search* mode (priority 3-4 above): `ExtensionsConfig.resolve_config_path()` returns `None` when neither an explicit `config_path` nor `DEER_FLOW_EXTENSIONS_CONFIG_PATH` is given and the search locations find nothing. An explicit `config_path` argument or a set `DEER_FLOW_EXTENSIONS_CONFIG_PATH` (priority 1-2) is an operator assertion that one particular file must be used, so a missing file in either of those modes raises `FileNotFoundError` instead — including when the file existed earlier and has since been deleted. The MCP tools cache's staleness check (`deerflow.mcp.cache._resolve_config_path`) is a narrow, deliberate exception to that rule: it catches that `FileNotFoundError` locally and treats it as "unconfigured" so a previously-valid config disappearing mid-run degrades the cache to serving its last-known-good tools instead of raising out of a per-request hot path (see the MCP System section below).
+**Extensions Configuration** (`extensions_config.json` at project root): MCP servers and skills configured together. Priority: explicit path > `DEER_FLOW_EXTENSIONS_CONFIG_PATH` env > search. Explicit paths are assertion-level (missing file raises `FileNotFoundError`); search mode returns `None`.
 
 ### Gateway API (`app/gateway/`)
 
-FastAPI application on port 8001 with health check at `GET /health`. Set `GATEWAY_ENABLE_DOCS=false` to disable `/docs`, `/redoc`, and `/openapi.json` in production (default: enabled).
+FastAPI application on port 8001 with health check at `GET /health`. Disable `/docs` in production with `GATEWAY_ENABLE_DOCS=false`. CORS same-origin by default behind nginx (port 2026).
 
-CORS is same-origin by default when requests enter through nginx on port 2026. Split-origin or port-forwarded browser clients must opt in with `GATEWAY_CORS_ORIGINS` (comma-separated exact origins); Gateway `CORSMiddleware` and `CSRFMiddleware` both read that variable so browser CORS and auth-origin checks stay aligned.
+→ Route details & RunStore contract: [docs/gateway-api-routers.md](docs/gateway-api-routers.md)
 
-Browser auth sessions are owned by `app.gateway.auth.session_cookie`. Login accepts a `remember_me` form flag, but the Gateway never stores passwords. `SessionCookiePolicy` persists the `HttpOnly access_token` cookie only for HTTPS/trusted-forwarded HTTPS, direct-host localhost HTTP, or explicit operator opt-in for insecure persistence; public HTTP sandbox URLs degrade to session cookies. Session-creating handlers stamp the final `max_age` on `request.state`, and CSRF cookie creation mirrors that value so the double-submit cookie pair expires together, including explicit re-issue after password changes and OIDC callbacks. A small `HttpOnly` preference cookie preserves the user's remember choice across token re-issue paths. Logout clears all auth cookies and suppresses CSRF re-issue on the logout response.
+**Routers**: Models, Features, Console (read-only observability), MCP, Skills, Memory,
+Uploads, Threads (goal, branches, compact), Artifacts, Suggestions, Input Polish,
+Thread Runs (streaming/wait/cancel), Feedback, Runs (stateless), GitHub Webhooks.
 
-Localhost persistence deliberately reads the direct request `Host` and ignores `Forwarded` / `X-Forwarded-Host`. Scheme and auth-origin reconstruction still consume forwarding headers. The bundled nginx sets `X-Forwarded-Proto`, but preserves an upstream HTTPS value and does not overwrite every forwarded header, so the outer trusted proxy must replace or strip client-supplied forwarding headers before traffic reaches DeerFlow.
+**Workspace changes:** `packages/harness/deerflow/workspace_changes/` captures pre/post
+snapshots of thread workspace and outputs directories (uploads excluded, text diffs capped).
 
-**Routers**:
-
-| Router | Endpoints |
-|--------|-----------|
-| **Models** (`/api/models`) | `GET /` - list models; `GET /{name}` - model details |
-| **Features** (`/api/features`) | `GET /` - report config-gated feature availability (currently `agents_api.enabled`) for frontend UI gating |
-| **Console** (`/api/console`) | Read-only cross-thread observability for the current user (the data layer for an operations dashboard or external monitoring): `GET /stats` - headline counters (runs/threads/agents/tokens/cost); `GET /runs` - paginated run history joined with thread titles (per-run cost); `GET /usage` - zero-filled daily token series + per-model breakdown with spend. Queries `runs`/`threads_meta` directly as a reporting layer (no new `RunStore` methods); requires a SQL database backend — returns 503 on `database.backend: memory`. Real-cost estimation reads optional `models[*].pricing` (`currency`, `input_per_million`, `output_per_million`, `input_cache_hit_per_million`; `ModelConfig` is `extra="allow"`, so no schema change) and prices each run from its `token_usage_by_model` input/output split. Pricing is **cache-aware**: `RunJournal` accumulates prompt-cache hits from `usage_metadata.input_token_details.cache_read` into a sparse `cache_read_tokens` bucket key (also threaded through `SubagentTokenCollector` → `record_external_llm_usage_records`), and cache-hit input tokens are billed at `input_cache_hit_per_million` (omitted → billed at the miss price, a conservative upper bound). Legacy rows fall back to run-level totals at `model_name`; unpriced models yield `cost: null` and cost fields are null when no pricing is configured |
-| **MCP** (`/api/mcp`) | `GET /config` - get config; `PUT /config` - update config (saves to extensions_config.json) |
-| **Skills** (`/api/skills`) | `GET /` - list skills; `GET /{name}` - details; `PUT /{name}` - update enabled; `POST /install` - install from .skill archive (accepts standard optional frontmatter like `version`, `author`, `compatibility`); `POST /reload` - admin-only process-local prompt-cache invalidation after trusted external filesystem changes |
-| **Memory** (`/api/memory`) | `GET /` - memory data; `POST /reload` - force reload; `GET /config` - config; `GET /status` - config + data |
-| **Uploads** (`/api/threads/{id}/uploads`) | `POST /` - upload files (auto-converts PDF/PPT/Excel/Word); `GET /list` - list; `DELETE /{filename}` - delete |
-| **Threads** (`/api/threads/{id}`) | `DELETE /` - remove DeerFlow-managed local thread data after LangGraph thread deletion; `POST /branches` - create a new main-thread branch from a completed assistant turn checkpoint. Workspace files are not checkpointed, so the branch only best-effort copies the current workspace when branching from the **latest** turn (`workspace_clone_mode="current_thread_best_effort"`); branching from an older/historical turn skips the copy (`workspace_clone_mode="skipped_historical_turn"`) so the branch never inherits files that only exist in a later timeline; `GET /goal`, `PUT /goal`, `DELETE /goal` - read, set, and clear the active thread goal; `POST /compact` - manually summarize older active context into `summary_text` and retain the recent message window, blocked while a run is in flight; unexpected failures are logged server-side and return a generic 500 detail |
-| **Artifacts** (`/api/threads/{id}/artifacts`) | `GET /{path}` - serve artifacts; active content types (`text/html`, `application/xhtml+xml`, `image/svg+xml`) are always forced as download attachments to reduce XSS risk; `?download=true` still forces download for other file types |
-| **Suggestions** (`/api/suggestions`) | `GET /config` - returns global suggestions config boolean; `POST /threads/{id}/suggestions` - generate follow-up questions; rich list/block model content is normalized and inline reasoning (`<think>...</think>`, including unclosed/truncated blocks from reasoning models like MiniMax-M3) is stripped before JSON parsing |
-| **Input Polish** (`/api/input-polish`) | `POST /` - rewrite a composer draft before it is sent. This is a short authenticated `runs:create` LLM request using `input_polish` config; it does not create a LangGraph run, persist a message, or modify thread state. Shares the non-graph one-shot LLM path (`deerflow.utils.oneshot_llm.run_oneshot_llm`) with the suggestions route so model build + Langfuse metadata + invoke stay in one place; validates the same stripped view of the draft it sends to the model, and preserves literal `<think>` substrings in the rewrite (`strip_think_blocks(truncate_unclosed=False)`) |
-| **Thread Runs** (`/api/threads/{id}/runs`) | `POST /` - create background run; `POST /stream` - create + SSE stream; `POST /wait` - create + block; `POST /regenerate/prepare` - prepare clean input + checkpoint metadata for regenerating the latest assistant answer; `GET /` - list runs; `GET /{rid}` - run details; `POST /{rid}/cancel` - cancel; `GET /{rid}/join` - join SSE; `GET /{rid}/messages` - paginated per-run messages `{data, has_more}`; `GET /{rid}/events` - full event stream; `GET /{rid}/workspace-changes` - workspace/output file change summary and optional diffs; `GET /../messages` - legacy thread message array; `GET /../messages/page` - backward thread-global `seq` history page with middleware/successful-regenerate filtering and page-run-scoped feedback enrichment; `GET /../token-usage` - aggregate tokens |
-| **Feedback** (`/api/threads/{id}/runs/{rid}/feedback`) | `PUT /` - upsert feedback; `DELETE /` - delete user feedback; `POST /` - create feedback; `GET /` - list feedback; `GET /stats` - aggregate stats; `DELETE /{fid}` - delete specific |
-| **Runs** (`/api/runs`) | `POST /stream` - stateless run + SSE; `POST /wait` - stateless run + block; `GET /{rid}/messages` - paginated messages by run_id `{data, has_more}` (cursor: `after_seq`/`before_seq`); `GET /{rid}/feedback` - list feedback by run_id |
-| **GitHub Webhooks** (`/api/webhooks/github`) | `POST /` - receive GitHub App / repo webhook deliveries. Verifies `X-Hub-Signature-256` against `GITHUB_WEBHOOK_SECRET`; exempt from auth + CSRF because authenticity is enforced by HMAC. The route is fail-closed: mounted only when `GITHUB_WEBHOOK_SECRET` is set, or when explicit dev opt-in `DEER_FLOW_ALLOW_UNVERIFIED_GITHUB_WEBHOOKS=1` is set. Recognized events include `ping`, `issues`, `issue_comment`, `pull_request`, `pull_request_review`, and `pull_request_review_comment`; unknown events return 200 with `handled=false`. Fan-out runtime failures return 503, keeping the delivery recorded as failed for manual/API/scripted redelivery (GitHub does not automatically retry any failed delivery, 5xx included); permanent/non-retryable conditions such as `channels.github.enabled: false`, unknown events, malformed payloads, or unavailable channel service return 200 with a skipped/handled response. |
-| **GitHub Event-Driven Agents** | Custom agents can declare a `github:` block in their `config.yaml` to bind to repos and event triggers. Webhook fan-out publishes one `InboundMessage` per matching binding to the channel bus; `GitHubChannel` routes those messages through `ChannelManager`. The response `dispatch` summarizes matched/fired/skipped agents. |
-
-**Workspace change review**: `packages/harness/deerflow/workspace_changes/`
-captures a pre-run and post-run snapshot of the thread-owned `workspace` and
-`outputs` directories. `runtime/runs/worker.py` performs the filesystem scan via
-`asyncio.to_thread` and writes a `workspace_changes` event with category
-`workspace` when changes exist. Uploads are intentionally excluded. Text diffs
-are size-limited; binary, large, and sensitive-looking paths are persisted as
-metadata only.
-
-**RunManager / RunStore contract**:
-- `RunManager.get()` is async; direct callers must `await` it.
-- The history batch helpers `list_successful_regenerate_sources()` and `get_many_by_thread()` default to `user_id=AUTO`: they resolve the request user and fail closed when no user context exists. Migration/admin callers that intentionally need an unscoped read must pass `user_id=None` explicitly.
-- When a persistent `RunStore` is configured, `get()` and `list_by_thread()` hydrate historical runs from the store. In-memory records win for the same `run_id` so task, abort, and stream-control state stays attached to active local runs.
-- `cancel()` returns a :class:`~deerflow.runtime.CancelOutcome` enum: `cancelled` (local cancel), `taken_over` (non-owning worker claimed the run because the owner's lease expired — marks it as `error`), `lease_valid_elsewhere` (owner's lease is still alive — caller should return 409 + `Retry-After`), `not_active_locally` (heartbeat disabled, preserving the old 409 path), `not_cancellable` (terminal state), or `unknown` (not found in memory or store). `create_or_reject(..., multitask_strategy="interrupt"|"rollback")` persists interrupted status through `RunStore.update_status()`, matching normal `set_status()` transitions.
-- Store-only hydrated runs are readable history. In multi-worker mode with heartbeat enabled, cancel on a store-only run can take over (mark `error`) when the owner's lease has expired past the grace window; otherwise it fails with 409 + `Retry-After`. In single-worker mode (heartbeat off), store-only runs still return 409.
-- `POST /wait` (both thread-scoped and `/api/runs/wait`) drains the stream bridge via `wait_for_run_completion()` instead of bare `await record.task`, so it honours the run's `on_disconnect` setting and cancels the background run on real client disconnect rather than returning a stale checkpoint (issue #3265).
-- Redis `StreamBridge` keys use a rolling retained-buffer TTL (`stream_bridge.stream_ttl_seconds`, refreshed on `publish()` / `publish_end()`) as a leak safety net, not as a run timeout. Startup orphan recovery publishes `END_SENTINEL` and schedules stream cleanup for recovered runs; malformed `Last-Event-ID` reconnect values live-tail new Redis events rather than replaying the retained buffer. Do not broaden this into a shared-database multi-pod reaper without adding worker ownership/liveness first.
-- Thread-scoped run creation accepts `checkpoint` / `checkpoint_id`; Gateway validates the checkpoint belongs to the request thread before writing `checkpoint_id` / `checkpoint_ns` into `config.configurable` for LangGraph branching.
-- Thread-scoped Gateway runs evaluate an active `ThreadState.goal` after the visible turn completes. `runtime/goal.py` asks a non-thinking evaluator model to judge only visible conversation evidence and return a typed blocker; the evaluator model is created once per run and reused across hidden continuation checks. The evaluator runs after the graph root's tracing scope has already closed, so `create_goal_evaluator_model`/`evaluate_goal_completion` attach their own model-level tracing callbacks (`attach_tracing=True`) and inject Langfuse trace metadata (`thread_id`/`user_id`/`deerflow_trace_id`) directly onto the `ainvoke` call — the same standalone-caller pattern as `oneshot_llm.run_oneshot_llm` and `MemoryUpdater` (see Tracing System below). Satisfied goals are cleared; every non-satisfied evaluation — continuable or stand-down — is persisted with `last_evaluation` (the blocker, reason, and evidence summary; outcomes that stop the loop additionally record a `stand_down_reason` for observability), but only `goal_not_met_yet` evaluations are streamed as hidden `HumanMessage` continuations, and only when a durable assistant end-of-turn checkpoint exists, the run has not been aborted, the thread did not change during evaluation, and the no-progress breaker has not fired. The continuation cap is 8 — a hard maximum in the `0`–`8` range; callers requesting more are clamped (`set_goal`/TUI) or rejected with 422 (`PUT /goal`). The no-progress breaker keys on the latest visible assistant evidence (not the evaluator's free-text reason, which an LLM rewords every turn), so two consecutive continuations that add no new visible assistant output stop the loop after 2 attempts. Model-response cleanup helpers such as think-block stripping and code-fence stripping live in `deerflow.utils.llm_text` so `runtime/goal.py` and Gateway suggestion parsing share the same JSON-prep behavior.
-
-Proxied through nginx: `/api/langgraph/*` → Gateway LangGraph-compatible runtime, all other `/api/*` → Gateway REST APIs.
+Proxied through nginx: `/api/langgraph/*` → Gateway LangGraph runtime, other `/api/*` → REST.
 
 ### Sandbox System (`packages/harness/deerflow/sandbox/`)
 
@@ -706,137 +497,31 @@ Lets a caller pass per-request, short-lived end-user credentials (e.g. an ERP to
 
 ### IM Channels System (`app/channels/`)
 
-Bridges external messaging platforms (Feishu, Slack, Telegram, Discord, DingTalk, GitHub) to the DeerFlow agent via Gateway's LangGraph-compatible API.
+Bridges Feishu, Slack, Telegram, Discord, DingTalk, GitHub to DeerFlow via Gateway's LangGraph-compatible API. Channels communicate through `langgraph-sdk` HTTP client with process-local internal auth.
 
-**Architecture**: Channels communicate with Gateway through the `langgraph-sdk` HTTP client (same as the frontend), ensuring threads are created and managed server-side. The internal SDK client injects process-local internal auth plus a matching CSRF cookie/header pair so Gateway accepts state-changing thread/run requests from channel workers without relying on browser session cookies.
+→ Full documentation: [docs/im-channels-system.md](docs/im-channels-system.md)
 
-**Components**:
-- `message_bus.py` - Async pub/sub hub (`InboundMessage` → queue → dispatcher; `OutboundMessage` → callbacks → channels)
-- `store.py` - JSON-file persistence mapping `channel_name:chat_id[:topic_id]` → `thread_id` (keys are `channel:chat` for root conversations and `channel:chat:topic` for threaded conversations)
-- `manager.py` - Core dispatcher: creates threads via `client.threads.create()`, routes commands including `/goal` (setting a goal persists it through Gateway and then routes the objective as a chat turn), keeps Slack/Discord on `client.runs.wait()`, uses `client.runs.stream(["messages-tuple", "values"])` for Feishu/Telegram incremental outbound updates, serializes same-thread Feishu turns in-manager when the channel's `ChannelRunPolicy.serialize_thread_runs=True` so rapid follow-ups queue instead of tripping the runtime busy reply, and switches to `client.runs.create()` (fire-and-forget, returns once the run is `pending`) for channels whose `ChannelRunPolicy.fire_and_forget=True` so long autonomous runs do not hit the SDK default 300s `httpx.ReadTimeout`
-  A swallowed streaming failure publishes its final outbound before releasing the inbound dedupe key, so a provider redelivery can retry without overtaking the terminal reply.
-- `base.py` - Abstract `Channel` base class (start/stop/send lifecycle)
-- `service.py` - Manages lifecycle of all configured channels from `config.yaml`
-- `slack.py` / `feishu.py` / `telegram.py` / `discord.py` / `dingtalk.py` - Platform-specific implementations (`feishu.py` tracks the running card `message_id` in memory and patches the same card in place; `telegram.py` registers the "Working on it..." placeholder as the stream target and edits it in place via `editMessageText`; `dingtalk.py` optionally uses AI Card streaming for in-place updates when `card_template_id` is configured)
-- `github.py` - Webhook-driven GitHub channel. Inbound messages come from `POST /api/webhooks/github`; outbound is log-only because GitHub agents post explicitly with `gh` from their sandbox when they choose to comment or create a PR
-- `app/gateway/routers/channel_connections.py` - Browser-facing user connection and disconnect APIs
-- `deerflow.persistence.channel_connections` - SQL-backed user-owned connection, optional credential, connect state, and conversation store
+**Components:** `message_bus.py` (pub/sub) · `store.py` (thread mapping) · `manager.py` (dispatcher, streaming/wait/fire-and-forget policies) · `base.py` (Channel base) · `service.py` (lifecycle) · `slack.py`/`feishu.py`/`telegram.py`/`discord.py`/`dingtalk.py` (platform impls) · `github.py` (webhook-driven) · `channel_connections.py` (browser APIs) · `deerflow.persistence.channel_connections` (SQL store)
 
-**Message Flow**:
-1. External platform -> Channel impl -> `MessageBus.publish_inbound()`
-   - For GitHub, the webhook router verifies the delivery then calls `fanout_event(bus, ...)`; matching agent bindings publish one `InboundMessage` each instead of a long-polling channel worker.
-2. `ChannelManager._dispatch_loop()` consumes from queue
-3. For user-owned channel connections, incoming messages carry `connection_id`, `owner_user_id`, and `workspace_id`; `owner_user_id` becomes the DeerFlow run `user_id`, while the raw platform user id remains `channel_user_id`. The Gateway accepts `channel_user_id` only from an internally authenticated channel caller's top-level `body.context`, clears it from both free-form `body.config` sections, and writes it into runtime context only (never `configurable`, which is checkpointed). `bash_tool` exposes it to sandbox commands as the fixed env var `DEERFLOW_CHANNEL_USER_ID` — via a shell-quoted command-string prefix, NOT the `execute_command(env=...)` channel, which is reserved for request-scoped secrets and would switch `AioSandbox` onto the `bash.exec` path (image >= 1.9.3, fresh session per call). Per-call injection keeps group-chat identity correct (one thread/sandbox, many senders) **without depending on the AIO shell's session semantics**: every IM-channel command carries an explicit `export VAR=<id>; ` (valid id) or `unset VAR; ` (empty / non-str / over the 256-char cap). The AIO no-env path reuses a persistent shell session (the reason for the class lock, #1433), so a bare command could otherwise resolve a stale id an earlier sender exported; the `unset` closes the window the length/type guard would open (a dropped id would inherit the previous sender's value). Non-IM runs (no `channel_user_id` in context) are left untouched. Not injected on the Windows local sandbox (its PowerShell/cmd.exe fallback has no `export`/`unset`). Propagates across `task` delegation: `task_tool` captures the dispatching turn's id and the subagent executor forwards it into the subagent's runtime context, same as the guardrail attribution fields. The runtime-context value is authorization-grade at the Gateway/guardrail boundary, but the exported shell variable remains informational because any bash command can overwrite its own environment; skills must not treat the shell variable itself as authenticated identity. Tests: `tests/test_gateway_services.py`, `tests/test_channel_user_id_env.py`
-4. For chat: look up/create thread through Gateway's LangGraph-compatible API
-5. Feishu/Telegram chat: `runs.stream()` → accumulate AI text → publish multiple outbound updates (`is_final=False`) → publish final outbound (`is_final=True`)
-6. Slack/Discord chat: `runs.wait()` → extract final response → publish outbound
-6b. GitHub chat (`ChannelRunPolicy.fire_and_forget=True`): `runs.create()` returns once the run is `pending`; the manager does not wait for the final state and does not publish an outbound. The agent posts its own reply mid-run via `gh` from the sandbox. `ConflictError` on a busy thread still trips the standard `THREAD_BUSY_MESSAGE` path (log-only on GitHub).
-7. Feishu channel sends one running reply card up front, then patches the same card for each outbound update (card JSON sets `config.update_multi=true` for Feishu's patch API requirement). Messages already sent inside an existing Feishu topic carry a compact source-message preview in that card, and queued same-thread follow-ups patch their own source message's card from queued → running → final without falling back to the generic busy reply.
-8. Telegram streaming: the "Working on it..." placeholder message is registered as the stream target; non-final updates `editMessageText` it in place (channel-side throttle: 1s in private chats, 3s in groups due to Telegram's 20 msg/min group cap; 4096-char truncation; rate-limited updates dropped); the final update performs the last edit and splits >4096 texts into follow-up messages
-9. DingTalk AI Card mode (when `card_template_id` configured): `runs.stream()` → create card with initial text → stream updates via `PUT /v1.0/card/streaming` → finalize on `is_final=True`. Falls back to `sampleMarkdown` if card creation or streaming fails
-10. For commands (`/new`, `/status`, `/models`, `/memory`, `/goal`, `/help`): handle locally or query Gateway API
-11. Outbound → channel callbacks → platform reply
-    - GitHub is the exception: the channel logs the final assistant message and does **not** auto-post it to GitHub. Agents use the sandbox `gh` CLI (`gh issue comment`, `gh pr comment`, `gh pr create`, etc.) for intentional writeback, so silence is cheap when several agents fan out on the same event.
+**Message Flow:** External platform → Channel → `MessageBus.publish_inbound()` → `ChannelManager._dispatch_loop()` → thread lookup/create → run dispatch (stream/wait/fire-and-forget per channel type) → outbound reply.
 
-**Owner-scoped file storage**: inbound files, uploads, and output artifacts are staged under the DeerFlow owner's bucket so they land where the agent run reads/writes (`users/{user_id}/threads/{thread_id}/user-data/{uploads,outputs}`). `ChannelManager._handle_chat` resolves the storage owner once via `_channel_storage_user_id(msg)` (sanitized owner id, falling back to `safe(msg.user_id)` for unbound auth-enabled channels — mirroring `_resolve_run_params`'s run identity; `None` only when no identity is available) and threads it as the `user_id=` kwarg through the file pipeline:
-- `Channel.receive_file(msg, thread_id, user_id=...)` — owner-bound channels persist downloaded files under the owner's bucket instead of the default bucket
-- `_ingest_inbound_files(...)` and the underlying `ensure_uploads_dir` / `get_uploads_dir` — owner-scoped via the same kwarg
-- `_resolve_attachments` / `_prepare_artifact_delivery` — resolve output artifacts from the bound owner's bucket
-The cached value is reused for both the blocking (`runs.wait`) and streaming (`_handle_streaming_chat`) paths, so uploads and artifact delivery always target the same bucket even if a channel returns a rewritten `InboundMessage` from `receive_file`. The bucket id matches the memory bucket resolved by `_resolve_memory_user_id` (both normalize through `make_safe_user_id`).
+**Owner-scoped file storage:** inbound files, uploads, and output artifacts are staged under the DeerFlow owner's bucket (`users/{user_id}/threads/{thread_id}/user-data/...`). The storage owner is resolved once per chat and cached for both blocking and streaming paths.
 
-**Configuration** (`config.yaml` -> `channels`):
-- `langgraph_url` - LangGraph-compatible Gateway API base URL (default: `http://localhost:8001/api`)
-- `gateway_url` - Gateway API URL for auxiliary commands (default: `http://localhost:8001`)
-- In Docker Compose, IM channels run inside the `gateway` container, so `localhost` points back to that container. Use `http://gateway:8001/api` for `langgraph_url` and `http://gateway:8001` for `gateway_url`, or set `DEER_FLOW_CHANNELS_LANGGRAPH_URL` / `DEER_FLOW_CHANNELS_GATEWAY_URL`.
-- Per-channel configs: `feishu` (app_id, app_secret), `slack` (bot_token, app_token), `telegram` (bot_token), `dingtalk` (client_id, client_secret, optional `card_template_id` for AI Card streaming), `github` (operator kill-switch `enabled`, plus `default_mention_login` for mention-required GitHub triggers)
-
-**User-owned channel connections** (`config.yaml` -> `channel_connections`):
-- Disabled by default. It is a user-binding layer on top of the existing `channels.*` runtime config, not a replacement for provider bot credentials.
-- No public IP, OAuth callback URL, or provider webhook route is required by the current implementation.
-- Telegram uses a deep-link `/start <code>` flow over the existing long-polling worker. Slack, Discord, Feishu/Lark, DingTalk, WeChat, and WeCom use `/connect <code>` over their existing outbound channel workers.
-- WeChat timing settings (`polling_timeout`, `polling_retry_delay`, `qrcode_poll_interval`, `qrcode_poll_timeout`) accept only positive finite seconds; invalid values fall back to their defaults so polling cannot enter a hot loop or sleep forever.
-- Frontend APIs: `GET /api/channels/providers`, `GET /api/channels/connections`, `POST /api/channels/{provider}/connect`, and `DELETE /api/channels/connections/{connection_id}`.
-- Browser APIs remain protected by normal Gateway auth/CSRF. Provider messages arrive through the already-configured channel workers.
-- Provider-level `connection_status` reflects the user's newest connection row. With no binding it is `not_connected`, except in auth-disabled local mode where a configured running channel reports `connected` because all channel messages already route to the default user.
-- Slack replies use the configured operator bot token from `channels.slack` unless per-connection credentials are present; unreadable or corrupt stored credentials are treated as unavailable.
-- Telegram, Slack, Discord, Feishu/Lark, DingTalk, WeChat, and WeCom workers resolve incoming platform identities to connection records before reaching `ChannelManager`.
-- **Connect-code ordering vs `allowed_users`**: inbound workers consume a valid `/connect <code>` (or Telegram `/start <code>`) **before** applying the `allowed_users` filter, so a newly allowlisted-but-unbound user can bootstrap their first bind via the browser flow. Consequence: `allowed_users` is **not** a bind-time defense — any sender who possesses a valid code can consume it (not only allowlisted users). The bind security model rests on the code's confidentiality: `secrets.token_urlsafe(16)`, 600 s TTL, one-time `consume_oauth_state`, and codes surfaced only in the initiating browser (never echoed to chat). `allowed_users` still gates ordinary (non-bind) messages.
-- **Single-active-owner transfer semantics**: an external identity is keyed by `(provider, external_account_id, workspace_id)`. The latest successful bind wins — `upsert_connection` revokes other owners' active rows for the same identity (ownership transfer). This invariant is enforced at the DB layer by the partial unique index `uq_channel_connection_active_identity` (`WHERE status != 'revoked'`), so concurrent connects from different owners cannot both end `connected`; the losing writer retries against the now-visible state. `find_connection_by_external_identity` therefore resolves deterministically.
-- See `backend/docs/IM_CHANNEL_CONNECTIONS.md` for provider setup, operational notes, and the architecture diagrams (connect-code flow, single-active-owner transfer, sync vs streaming dispatch, owner-scoped file storage pipeline).
-
-**GitHub event-driven agents** (webhook-driven IM channel):
-- Custom agents declare a `github:` block in their `config.yaml` to bind to repos and event triggers; the webhook route is fail-closed by default (mounted only when `GITHUB_WEBHOOK_SECRET` is set) and exempt from auth/CSRF because authenticity is enforced by HMAC.
-- Outbound is **log-only** by design: each agent posts its own reply mid-run via the `gh` CLI from its sandbox, so the manager uses `fire_and_forget=True` and `runs.create()` returns once pending.
-- See [backend/docs/GITHUB_AGENTS.md](docs/GITHUB_AGENTS.md) for the architecture diagrams: webhook → fan-out → `InboundMessage` dispatch, `preferred_thread_id = UUID5(repo, number, agent_name)` thread determinism, mention-handle precedence chain, GH token lifecycle via `GH_TOKEN`/`GITHUB_TOKEN` per-call `extra_env`, and the narrow `ConflictError` (HTTP 409) thread-create race recovery.
-
+**GitHub event-driven agents:** Custom agents declare `github:` block in `config.yaml`. Webhook → fan-out → `InboundMessage` dispatch; fire-and-forget with agent-posting via `gh`. See [docs/GITHUB_AGENTS.md](docs/GITHUB_AGENTS.md).
 
 ### Memory System (`packages/harness/deerflow/agents/memory/`)
 
-**Components**:
-- `updater.py` - LLM-based memory updates with fact extraction, whitespace-normalized fact deduplication (trims leading/trailing whitespace before comparing), and atomic file I/O
-- `queue.py` - Debounced update queue (per-thread deduplication, configurable wait time); captures `user_id` at enqueue time so it survives the `threading.Timer` boundary
-- `prompt.py` - Prompt templates for memory updates
-- `storage.py` - File-based storage with per-user isolation; cache keyed by `(user_id, agent_name)` tuple
-- `tools.py` - Tool-driven memory mode (`memory_search`, `memory_add`, `memory_update`, `memory_delete`) using the same storage/update primitives
+Per-user persistent memory with LLM-based fact extraction, deduplication, staleness review, and consolidation. Two modes:
+`middleware` (default: passive background extraction via `MemoryMiddleware`) and
+`tool` (experimental: `memory_search`/`add`/`update`/`delete` tools).
 
-**Per-User Isolation**:
-- Memory is stored per-user at `{base_dir}/users/{user_id}/memory.json`
-- Per-agent per-user memory at `{base_dir}/users/{user_id}/agents/{agent_name}/memory.json`
-- Custom agent definitions (`SOUL.md` + `config.yaml`) are also per-user at `{base_dir}/users/{user_id}/agents/{agent_name}/`. The legacy shared layout `{base_dir}/agents/{agent_name}/` remains read-only fallback for unmigrated installations
-- Middleware mode captures `user_id` via `get_effective_user_id()` at enqueue time; tool mode resolves `user_id` and `agent_name` from `ToolRuntime.context` via `resolve_runtime_user_id(runtime)` so tool calls stay scoped to the authenticated user and active custom agent
-- The `/api/memory*` endpoints resolve the owner through `_resolve_memory_user_id(request)`: trusted internal callers (IM channel workers carrying the `X-DeerFlow-Owner-User-Id` header, e.g. a bound `/memory` command) act for the connection owner; browser/API callers fall back to `get_effective_user_id()`. The header is only honored after `AuthMiddleware` validated the internal token, mirroring `get_trusted_internal_owner_user_id` used by the threads router
-- In no-auth mode, `user_id` defaults to `"default"` (constant `DEFAULT_USER_ID`)
-- Absolute `storage_path` in config opts out of per-user isolation
-- **Migration**: Run `PYTHONPATH=. python scripts/migrate_user_isolation.py` to move legacy `memory.json`, `threads/`, and `agents/` into per-user layout. Supports `--dry-run` (preview changes) and `--user-id USER_ID` (assign unowned legacy data to a user, defaults to `default`).
+→ Full documentation: [docs/memory-system.md](docs/memory-system.md)
 
-**Data Structure** (stored in `{base_dir}/users/{user_id}/memory.json`):
-- **User Context**: `workContext`, `personalContext`, `topOfMind` (1-3 sentence summaries)
-- **History**: `recentMonths`, `earlierContext`, `longTermBackground`
-- **Facts**: Discrete facts with `id`, `content`, `category` (preference/knowledge/context/behavior/goal), `confidence` (0-1), `createdAt`, `source`
+**Key modules:** `updater.py` (LLM extraction) · `queue.py` (debounced) · `prompt.py` · `storage.py` (per-user isolation) · `tools.py` (tool mode)
 
-**Workflow**:
-- `memory.mode: middleware` (default) keeps the passive path: `MemoryMiddleware` filters messages (user inputs + final AI responses), captures `user_id` via `get_effective_user_id()`, queues conversation with the captured `user_id`, and the debounced background thread invokes the LLM to extract context updates and facts using the stored `user_id`.
-- `memory.mode: tool` skips `MemoryMiddleware` and registers `memory_search`, `memory_add`, `memory_update`, and `memory_delete` on the agent. The model decides when to search, add, update, or delete facts; this is opt-in/experimental and should not be described as better than middleware mode without eval evidence.
-- Both modes share `FileMemoryStorage`, per-user/per-agent isolation, prompt injection, manual CRUD primitives, and the updater backend.
-- Middleware mode queue debounces (30s default), batches updates, deduplicates per-thread, applies updates atomically (temp file + rename) with cache invalidation, and skips duplicate fact content before append.
-- Staleness pass (same LLM invocation as the regular updater, no extra API call): when `staleness_review_enabled` is `true` and at least `staleness_min_candidates` aged facts exist, `_select_stale_candidates` selects facts older than their individual review window (`expected_valid_days`, or the global `staleness_age_days` fallback) that are not in `staleness_protected_categories` (default: `correction`), surfaces them in the prompt with a `valid:Nd` annotation, and the LLM judges each as KEEP, REMOVE, or EXTEND. REMOVE entries go in `staleFactsToRemove`; EXTEND entries go in `staleFactsToExtend` with an `extend_by_days` value, which sets the fact's `expected_valid_days` to `min(days_since_created + extend_by_days, staleness_max_extension_days)`. The LLM assigns `expected_valid_days` when creating a fact; it is clamped at write time to `staleness_age_days × staleness_max_lifetime_multiplier` (creation cap). `_apply_updates` enforces the guardrail unconditionally at apply time: it intersects both the removal and extension sets with `_select_stale_candidates` output before applying the per-cycle cap (`staleness_max_removals_per_cycle`), so protected and non-aged facts can never be targeted regardless of model behavior or the feature flag setting. Facts the LLM proposed for removal are excluded from extension even if the per-cycle cap prevented their actual deletion that cycle. Extensions use an absolute ceiling (`staleness_max_extension_days`) rather than the creation multiplier so a deliberate review decision can advance the window beyond the initial cap while preventing `timedelta` overflow from a malformed `extend_by_days`.
-- Consolidation pass (same LLM invocation as the regular updater, no extra API call): when `consolidation_enabled` is `true` and at least one category holds `consolidation_min_facts` or more facts, `_select_consolidation_candidates` identifies fragmented categories and surfaces at most `consolidation_max_groups_per_cycle` of them (largest first) in the prompt. The LLM decides which groups to merge and proposes a synthesised fact per group. `_apply_updates` enforces guardrails: source IDs must exist and must not overlap across groups, group size is capped at `consolidation_max_sources`, the merged fact's confidence cannot exceed the source maximum, and facts below `fact_confidence_threshold` are not written.
-- Next interaction injects selected facts + context into `<memory>` tags in the system prompt when `injection_enabled` is true.
+**Data:** User context (`workContext`, `personalContext`, `topOfMind`), history, discrete facts (id, content, category, confidence).
 
-**Run-level memory identity**:
-- Every Gateway run with an effective hidden memory block hashes the exact `HumanMessage.content`, including the `<memory>` wrapper, and records one `context:memory` event through its run-scoped `RunJournal`. Later runs and checkpoint-based branches reuse the frozen message without reloading memory; goal continuations are deduplicated to one event per run.
-- A first-run block is trusted only when it comes from `DynamicContextMiddleware`'s current update. A reused block must have existed in the checkpoint before the run, and the Gateway strips dynamic-context markers from untrusted input so a caller cannot forge the identity event by reusing a known message ID.
-- The production consumer is the existing debug/audit endpoint `GET /api/threads/{thread_id}/runs/{run_id}/events?event_types=context:memory`. Event content has exactly one field, `content_sha256`, which operators use to compare the effective memory identity across runs. The full memory text stays in checkpoint state and is not duplicated into `run_events`.
-
-**Token counting** (`packages/harness/deerflow/agents/memory/prompt.py`):
-- `_count_tokens` budgets the injection. In default `tiktoken` mode, the encoding is loaded lazily and cached.
-- Failed tiktoken loads are cached with a timestamp. During the fixed cooldown (`_TIKTOKEN_RETRY_COOLDOWN_S`, 600s), callers fall back to char estimation immediately instead of re-triggering the blocking BPE download; after the cooldown, transient outages can self-heal without a restart.
-- In-flight loads are cached as a LOADING sentinel so concurrent callers fall back instead of spawning more blocking threads.
-- Set `memory.token_counting: char` to skip tiktoken entirely and use the network-free CJK-aware char estimate.
-
-Focused regression coverage for the updater lives in `backend/tests/test_memory_updater.py`.
-
-**Configuration** (`config.yaml` → `memory`):
-- `enabled` / `injection_enabled` - Master switches
-- `mode` - Operation mode: `middleware` (default passive background extraction) or `tool` (experimental model-driven memory tools). Modes are mutually exclusive.
-- `storage_path` - Path to memory.json (absolute path opts out of per-user isolation)
-- `debounce_seconds` - Wait time before processing (default: 30)
-- `shutdown_flush_timeout_seconds` - Host-shared hard budget (seconds) to drain the memory backend's pending-update buffer on Gateway graceful shutdown (default: 30; 1–300). Each pending item does one LLM call, so large IM batches may need more. The Gateway lifespan calls `MemoryManager.shutdown_flush(timeout)` after channels/scheduler stop; the backend short-circuits on an idle buffer, so the host calls it unconditionally (no pending/processing gate). Must fit inside the pod's K8s `terminationGracePeriodSeconds` (gateway Helm chart sets this; default 45s) or K8s SIGKILLs the drain mid-flight.
-- `model_name` - LLM for updates (null = default model)
-- `max_facts` / `fact_confidence_threshold` - Fact storage limits (100 / 0.7)
-- `max_injection_tokens` - Token limit for prompt injection (2000)
-- `token_counting` - Token counting strategy for the injection budget: `tiktoken` (default, accurate but may download BPE data from a public endpoint on first use — can block for a long time in network-restricted environments, see issues #3402/#3429) or `char` (network-free CJK-aware char estimate, never touches tiktoken)
-- `staleness_review_enabled` - Enable proactive staleness pruning of aged facts (default: `true`; only triggers when aged candidates exist)
-- `staleness_age_days` - Age in days before a fact becomes a staleness candidate (default: 90; range: 30–365)
-- `staleness_min_candidates` - Minimum aged candidates required to trigger a review cycle (default: 3; range: 1–50)
-- `staleness_max_removals_per_cycle` - Maximum facts removed in a single cycle; lowest-confidence entries are kept when the LLM requests more (default: 10; range: 1–50)
-- `staleness_protected_categories` - Fact categories that are never pruned by staleness review (default: `["correction"]`)
-- `staleness_max_lifetime_multiplier` - Creation-time cap multiplier for a fact's LLM-assigned `expected_valid_days`: stored value is clamped to `staleness_age_days × multiplier` so the model cannot defer first review indefinitely (default: 20.0; range: 1.0–100.0). Default 20.0 (90 × 20 = 1800 d ≈ 5 years) is generous enough to support the very-stable prompt tier without needing multiple review cycles to escape the cap.
-- `staleness_max_extension_days` - Absolute upper bound (in days) on `expected_valid_days` after a lifetime extension (`staleFactsToExtend`). Applied at write time as `min(days_since + extend_by, staleness_max_extension_days)`. Uses an absolute ceiling rather than the multiplier because extensions are deliberate review decisions; prevents `timedelta` overflow and LLM misfire from permanently deferring a fact (default: 3650 = 10 years; range: 90–36500).
-- `consolidation_enabled` - Enable memory consolidation (default: `true`; no extra API call — runs in the same LLM invocation as the normal memory update)
-- `consolidation_min_facts` - Minimum facts in a category to trigger consolidation review (default: 8; range: 3–30)
-- `consolidation_max_groups_per_cycle` - Maximum categories the LLM can merge in one cycle (default: 3; range: 1–10; also controls the LLM's prompt instruction)
-- `consolidation_max_sources` - Maximum source facts per merge group; prevents over-merging (default: 8; range: 2–20)
+**Selected config keys** (`config.yaml` → `memory`): `enabled`, `injection_enabled`, `mode`, `storage_path`, `debounce_seconds`, `model_name`, `max_facts=100`, `fact_confidence_threshold=0.7`, `max_injection_tokens=2000`, `token_counting=tiktoken|char`. Staleness: `staleness_review_enabled=true`, `age_days=90`. Consolidation: `consolidation_enabled=true`, `min_facts=8`.
 
 ### Reflection System (`packages/harness/deerflow/reflection/`)
 
