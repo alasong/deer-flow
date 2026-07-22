@@ -24,6 +24,7 @@ from deerflow.config.input_polish_config import InputPolishConfig
 from deerflow.config.loop_detection_config import LoopDetectionConfig
 from deerflow.config.memory_config import MemoryConfig, load_memory_config_from_dict
 from deerflow.config.model_config import ModelConfig
+from deerflow.pipeline.config import PipelineConfig
 from deerflow.config.offload_config import OffloadConfig
 from deerflow.config.read_before_write_config import ReadBeforeWriteConfig
 from deerflow.config.reload_boundary import format_field_description
@@ -209,6 +210,13 @@ class AppConfig(BaseModel):
         description=format_field_description(
             "scheduler",
             field_doc="Scheduled task runtime configuration (background poller for one-time and cron agent runs).",
+        ),
+    )
+    pipelines: PipelineConfig = Field(
+        default_factory=PipelineConfig,
+        description=format_field_description(
+            "pipelines",
+            field_doc="Pipeline orchestrator configuration (enabled, definitions, middleware_profiles).",
         ),
     )
     checkpointer: CheckpointerConfig | None = Field(

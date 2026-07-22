@@ -72,6 +72,10 @@ STARTUP_ONLY_FIELDS: dict[str, str] = {
         "RunOwnershipConfig is captured once into RunManager at langgraph_runtime() startup; the lease heartbeat background task is created and "
         "started there, and heartbeat_enabled / lease_seconds / grace_seconds are not re-read on config.yaml edits."
     ),
+    "pipelines": (
+        "PipelineOrchestrator reads pipeline definitions once per thread during create_run(); enabled and definitions changes "
+        "on existing pipeline runs are not backfilled on config.yaml edits."
+    ),
 }
 
 

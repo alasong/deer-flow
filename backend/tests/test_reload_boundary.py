@@ -92,6 +92,7 @@ def test_appconfig_descriptions_retain_original_field_documentation():
         "checkpointer": "state-persistence checkpointer",
         "stream_bridge": "Stream bridge",
         "channel_connections": "IM channel connection",
+        "pipelines": "Pipeline orchestrator configuration",
     }
     for field_name, expected_substring in descriptions.items():
         description = AppConfig.model_fields[field_name].description or ""
