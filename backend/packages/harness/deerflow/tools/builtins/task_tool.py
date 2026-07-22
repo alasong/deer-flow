@@ -233,6 +233,7 @@ async def task_tool(
     prompt: str,
     subagent_type: str,
     tool_call_id: Annotated[str, InjectedToolCallId],
+    skill: str | None = None,
 ) -> str | Command:
     """Delegate a task to a specialized subagent that runs in its own context.
 
@@ -268,6 +269,10 @@ async def task_tool(
         description: A short (3-5 word) description of the task for logging/display. ALWAYS PROVIDE THIS PARAMETER FIRST.
         prompt: The task description for the subagent. Be specific and clear about what needs to be done. ALWAYS PROVIDE THIS PARAMETER SECOND.
         subagent_type: The type of subagent to use. ALWAYS PROVIDE THIS PARAMETER THIRD.
+        skill: Optional skill name to load in the subagent. When set, the subagent
+            loads only this skill instead of inheriting the parent's skill allowlist.
+            Use when the subagent needs a specific skill's context (e.g., SKILL.md,
+            role packs) to perform its task.
     """
     runtime_app_config = _get_runtime_app_config(runtime)
     cache_token_usage = _token_usage_cache_enabled(runtime_app_config)
@@ -352,6 +357,12 @@ async def task_tool(
     parent_available_skills = metadata.get("available_skills")
     if parent_available_skills is not None:
         overrides["skills"] = _merge_skill_allowlists(list(parent_available_skills), config.skills)
+
+    # If a specific skill is requested, override config.skills to load only that
+    # skill in the subagent. This takes precedence over parent_available_skills
+    # so the subagent gets exactly the skill it needs (e.g. a PDF role pack).
+    if skill is not None:
+        overrides["skills"] = [skill]
 
     if overrides:
         config = replace(config, **overrides)

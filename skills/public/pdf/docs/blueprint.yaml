@@ -1,0 +1,222 @@
+# PDF 强引擎蓝图 — 固定 PDCA 拓扑
+#
+# 每个节点有明确的 retry 策略和类型。
+# manual_checkpoint 节点执行后阻塞下游，需人工确认。
+# 所有 transition 有 max_loops，超限后 HSM pause → 人工介入。
+
+name: "PDF Strong Engine Blueprint"
+version: "1.0.0"
+
+stages:
+  # ================================================================
+  # Plan — 方案设计 + 审查批准
+  # ================================================================
+  plan:
+    entry_gate:
+      artifacts: []
+      on_fail: block
+
+    nodes:
+      # P0: 前置分析（引擎执行，无需 LLM）
+      - ref: P0_precheck
+        type: engine_exec
+        command: pdf-engine.py precheck run
+        deps: []
+        retry: 2
+        description: "前置检查（引擎预检）"
+
+      - ref: P0_scope
+        type: engine_exec
+        command: pdf-engine.py scope classify
+        deps: [P0_precheck]
+        retry: 2
+        description: "上下文范围检测"
+
+      - ref: P0_kb
+        type: engine_exec
+        command: pdf-engine.py knowledge seed
+        deps: [P0_scope]
+        retry: 2
+        optional: true
+        description: "知识库/技术栈注入"
+
+      # P1: 方案设计（LLM spawn doer）
+      - ref: P1_design
+        type: llm_spawn
+        spawn_role: designer
+        deps: [P0_scope, P0_kb]
+        retry: 3
+        artifacts: [plan_decisions.yaml]
+        description: "方案设计 — spawn N doer"
+
+      # P2: 审查（LLM spawn reviewer）
+      - ref: P2_review
+        type: llm_spawn
+        spawn_role: planner_reviewer
+        deps: [P1_design]
+        retry: 3
+        artifacts: [plan_review_*.md]
+
+      # P3: 收敛（LLM merge）
+      - ref: P3_converge
+        type: llm_converge
+        deps: [P2_review]
+        retry: 3
+        artifacts: [plan.md]
+
+      # ⚠ 人工确认节点
+      - ref: PLAN_APPROVE
+        type: manual_checkpoint
+        deps: [P3_converge]
+        retry: 0
+        prompt: "Plan 已完成。请确认是否进入 Do 阶段？输入 'y' 确认，'n' 驳回重做。"
+
+    transitions:
+      # 正常推进
+      - event: design_approved
+        target: __exit__
+        max_loops: 1
+        desc: "Plan 获批 — 进入 Do 阶段"
+
+      # Check 回滚
+      - event: design_flaw
+        target: plan.P1_design
+        reset: [plan.P1_design, plan.P2_review, plan.P3_converge, plan.PLAN_APPROVE]
+        max_loops: 2
+        desc: "设计缺陷 — 回滚到 P1 重新设计"
+
+  # ================================================================
+  # Do — 多路并行实现 + 集成审查
+  # ================================================================
+  do:
+    entry_gate:
+      artifacts: [plan.md]
+      on_fail: block
+
+    nodes:
+      - ref: D0_prepare
+        type: engine_exec
+        command: pdf-engine.py context bundle
+        deps: []
+        retry: 2
+        description: "上下文准备"
+
+      - ref: D1_doer
+        type: llm_spawn
+        spawn_role: doer
+        deps: [D0_prepare]
+        retry: 3
+        artifacts: [do_output_*.md]
+        description: "实现 — spawn N doer（N 由 plan 决定）"
+
+      - ref: D1_merge
+        type: llm_merge
+        deps: [D1_doer]
+        retry: 3
+        artifacts: [merged.md]
+        description: "多路输出合并"
+
+      - ref: D2_review
+        type: llm_spawn
+        spawn_role: reviewer
+        deps: [D1_merge]
+        retry: 3
+        artifacts: [review_do.md]
+        description: "实现审查 — spawn M reviewer"
+
+      - ref: D3_fix
+        type: repair_gate
+        deps: [D2_review]
+        retry: 3
+        artifacts: [repair_decisions.yaml]
+        description: "修复门 — 按 P1 类型路由修复"
+
+    transitions:
+      - event: done
+        target: __exit__
+        max_loops: 1
+        desc: "Do 完成 — 进入 Check 阶段"
+
+      - event: design_flaw_detected
+        target: plan
+        reset: [plan.*]
+        max_loops: 2
+        desc: "Do 审查发现设计缺陷 — 回滚到 Plan"
+
+      - event: bug
+        target: do.D1_doer
+        reset: [do.D1_doer, do.D1_merge, do.D2_review, do.D3_fix]
+        max_loops: 3
+        desc: "实现 bug — 回滚到 D1 重新实现"
+
+  # ================================================================
+  # Check — 校验 + 修复门 + 路由决策
+  # ================================================================
+  check:
+    entry_gate:
+      artifacts: [merged.md]
+      on_fail: block
+
+    nodes:
+      - ref: C1_check
+        type: llm_spawn
+        spawn_role: checker
+        deps: []
+        retry: 3
+        artifacts: [check_report.md]
+        description: "校验 — spawn N checker"
+
+      - ref: C2_repair_gate
+        type: repair_gate
+        deps: [C1_check]
+        retry: 2
+        artifacts: [repair_decisions.yaml]
+        description: "修复门 — 按 P1 路由到 fix/rollback/act"
+
+    transitions:
+      - event: clean
+        target: __exit__
+        max_loops: 1
+        desc: "全部通过 — 进入 Act"
+
+      - event: bug
+        target: do
+        reset: [do.*]
+        max_loops: 3
+        desc: "P1 bug — 回滚到 Do 阶段"
+
+      - event: design_flaw
+        target: plan
+        reset: [plan.*]
+        max_loops: 2
+        desc: "设计缺陷 — 回滚到 Plan 阶段"
+
+  # ================================================================
+  # Act — 标准化 + 经验沉淀
+  # ================================================================
+  act:
+    entry_gate:
+      artifacts: [check_report.md]
+      on_fail: warn
+
+    nodes:
+      - ref: A1_standardize
+        type: llm_converge
+        deps: []
+        retry: 3
+        artifacts: [act_report.md]
+        description: "标准化 — 生成 act_report"
+
+      - ref: A2_evolve
+        type: engine_exec
+        command: pdf-engine.py knowledge append-ts
+        deps: [A1_standardize]
+        retry: 2
+        optional: true
+        description: "技术栈经验沉淀"
+
+    transitions:
+      - event: done
+        target: __final__
+        max_loops: 1
+        desc: "Act 完成 — cycle 结束"

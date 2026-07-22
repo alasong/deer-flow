@@ -1,0 +1,203 @@
+# PDF 强引擎蓝图 — PLANNING 模式
+#
+# 专为"从项目需求到迭代规划"的非代码规划类任务设计。
+# 核心差异 vs lite/standard/full/analysis：
+#   1. 无 P0 前置节点（非代码任务不需要技术预检）→ 直奔需求分析
+#   2. P2_architecture 产出 2-3 个架构候选方案，等待用户确认
+#   3. PLAN_APPROVE 设 auto_approve=false，要求用户明确批准
+#   4. Check 五路路由：clean / ambiguity(P1) / arch_flaw(P2) / scope_change(P3) / inconsistency(P4)
+#   5. 全 llm_converge（规划是认知密集型串行流程，不适合并行 spawn）
+#
+# 适用：项目规划、迭代规划、需求分析+架构设计+任务分解+排期
+
+name: "PDF Planning Blueprint"
+version: "1.0.0"
+channel: planning
+
+stages:
+  # ================================================================
+  # Plan — 核心规划阶段
+  # 5 个串行分析节点 + 人工确认 checkpoint
+  # ================================================================
+  plan:
+    entry_gate:
+      artifacts: []
+      on_fail: block
+
+    nodes:
+      - ref: P1_analyze_req
+        type: llm_converge
+        deps: []
+        retry: 2
+        artifacts: [req_analysis.md]
+        description: >
+          需求分析 — 阅读任务、理解需求全景，输出需求分析。
+          包括：干系人分析、需求全景图、假设清单、歧义标注、验收条件初稿。
+
+      - ref: P2_architecture
+        type: llm_converge
+        deps: [P1_analyze_req]
+        retry: 2
+        artifacts: [arch_decisions.yaml]
+        description: >
+          架构设计 — 基于需求分析产出 2-3 个架构候选方案。
+          每个方案标注：技术栈、模块划分、数据流、接口设计、成本/复杂度/扩展性权衡。
+          输出推荐方案。用户通过 PLAN_APPROVE 确认后视为选定。
+
+      - ref: P3_decompose
+        type: llm_converge
+        deps: [P2_architecture]
+        retry: 2
+        artifacts: [decomposition.yaml]
+        description: >
+          任务分解 — 将确认的架构方案拆解为 Epic→Story→Task 三层。
+          标注依赖 DAG（前置依赖、阻塞关系）、工作量估算（人天/人时）、技能要求。
+
+      - ref: P4_prioritize
+        type: llm_converge
+        deps: [P3_decompose]
+        retry: 2
+        artifacts: [prioritized_backlog.yaml]
+        description: >
+          优先级排序 — 使用 MoSCoW 或 RICE 框架对所有任务排序。
+          标注：Must/Should/Could/Wont、价值/成本/风险评分、建议的迭代分配。
+
+      - ref: P5_sprint_plan
+        type: llm_converge
+        deps: [P4_prioritize]
+        retry: 2
+        artifacts: [sprint_plan.yaml]
+        description: >
+          迭代规划 — 将排序后的 backlog 分配到具体 Sprint/迭代。
+          包含：里程碑时间线、每个 Sprint 的目标和交付物、风险缓冲、发布计划。
+
+      - ref: PLAN_APPROVE
+        type: manual_checkpoint
+        deps: [P5_sprint_plan]
+        retry: 0
+        auto_approve: false
+        prompt: >
+          规划完成。请确认：
+          1) 架构方案是否采用推荐方案？
+          2) 任务分解和优先级是否合理？
+          3) 迭代分配是否可执行？
+          确认后进入 Do 阶段。
+
+    transitions:
+      - event: design_approved
+        target: __exit__
+        max_loops: 1
+        desc: "规划获批 — 进入 Do 阶段"
+
+  # ================================================================
+  # Do — 文档整理
+  # 将 Plan 各节点产出整合为完整规划文档
+  # ================================================================
+  do:
+    entry_gate:
+      artifacts: [req_analysis.md, arch_decisions.yaml, decomposition.yaml, prioritized_backlog.yaml, sprint_plan.yaml]
+      on_fail: block
+
+    nodes:
+      - ref: D1_format
+        type: llm_converge
+        deps: []
+        retry: 1
+        artifacts: [formatted_plan.md]
+        description: >
+          文档整理 — 将各 Plan 节点的产出整理为一份完整的规划文档。
+          包含：执行概要、架构决策记录、任务分解、优先级排序、迭代计划。
+
+    transitions:
+      - event: done
+        target: __exit__
+        max_loops: 1
+        desc: "格式化完成 — 进入 Check"
+
+  # ================================================================
+  # Check — 质量校验 + 五路修复路由
+  # ================================================================
+  check:
+    entry_gate:
+      artifacts: [formatted_plan.md]
+      on_fail: block
+
+    nodes:
+      - ref: C1_verify
+        type: llm_converge
+        deps: []
+        retry: 1
+        artifacts: [check_report.md]
+        description: >
+          校验 — 检查规划质量。
+          确认：需求理解是否完整？架构方案是否可行？
+          分解粒度是否合适？优先级排序是否合理？迭代计划是否可执行？
+
+      - ref: C2_repair_gate
+        type: repair_gate
+        deps: [C1_verify]
+        retry: 1
+        artifacts: [repair_decisions.yaml]
+        description: >
+          修复门 — 五路路由：
+          clean→放行；ambiguity→回退 P1 补充需求分析；
+          arch_flaw→回退 P2 修改架构；scope_change→回退 P3 调整分解；
+          inconsistency→回退 P4 重整优先级。
+
+    transitions:
+      - event: clean
+        target: __exit__
+        max_loops: 1
+        desc: "规划质量通过 — 进入 Act"
+      - event: ambiguity
+        target: plan.P1_analyze_req
+        reset: [plan.P1_analyze_req, plan.P2_architecture, plan.P3_decompose, plan.P4_prioritize, plan.P5_sprint_plan, plan.PLAN_APPROVE]
+        max_loops: 2
+        desc: "需求模糊 — 回退到 P1 重新分析需求"
+      - event: arch_flaw
+        target: plan.P2_architecture
+        reset: [plan.P2_architecture, plan.P3_decompose, plan.P4_prioritize, plan.P5_sprint_plan, plan.PLAN_APPROVE]
+        max_loops: 2
+        desc: "架构缺陷 — 回退到 P2 重新设计架构"
+      - event: scope_change
+        target: plan.P3_decompose
+        reset: [plan.P3_decompose, plan.P4_prioritize, plan.P5_sprint_plan, plan.PLAN_APPROVE]
+        max_loops: 2
+        desc: "范围变更 — 回退到 P3 重新分解任务"
+      - event: inconsistency
+        target: plan.P4_prioritize
+        reset: [plan.P4_prioritize, plan.P5_sprint_plan, plan.PLAN_APPROVE]
+        max_loops: 2
+        desc: "优先级矛盾 — 回退到 P4 重新排序"
+
+  # ================================================================
+  # Act — 标准化输出 + 经验沉淀
+  # ================================================================
+  act:
+    entry_gate:
+      artifacts: [check_report.md]
+      on_fail: warn
+
+    nodes:
+      - ref: A1_standardize
+        type: llm_converge
+        deps: []
+        retry: 2
+        artifacts: [plan_decisions.yaml, act_report.md]
+        description: >
+          标准化输出 — 生成最终的规划交付物。
+          plan_decisions.yaml 记录关键决策及理由；
+          act_report.md 包含完整规划报告（执行概要、架构决策、迭代计划）。
+
+      - ref: A2_evolve
+        type: engine_exec
+        command: pdf-engine.py knowledge append-ts
+        deps: [A1_standardize]
+        retry: 1
+        description: "经验沉淀（如有值得记录的点）"
+
+    transitions:
+      - event: done
+        target: __final__
+        max_loops: 1
+        desc: "规划完成 — cycle 结束"

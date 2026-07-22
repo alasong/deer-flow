@@ -1,0 +1,79 @@
+# ============================================================================
+#  DEPRECATED — 此文件已被废弃，不再使用
+# ============================================================================
+#  domain-context.yaml 中的所有领域配置已迁移至 docs/domain/<domain>.yaml。
+#  此文件保留仅作历史参考，所有读者应直接使用 docs/domain/ 中的文件。
+#
+#  规范值：
+#    max_searches: 3   ← 权威配置来源为 docs/domain/*.yaml / channel-rules.yaml
+#         (PS: 旧版 domain-context.yaml 即使有 max_searches: 3 也不应被引用)
+#
+#  请勿修改此文件。新增或更新领域配置请编辑 docs/domain/<domain>.yaml。
+# ============================================================================
+# (以下内容保留供历史参考，不会在流水线中使用)
+
+domains:
+  security:
+    search_queries:
+      - "{topic} 已知攻击模式 CVE OWASP {year}"
+      - "{topic} 行业安全基线 最佳实践 纵深防御 {year}"
+      - "{topic} 安全架构 零信任 供应链安全 {year}"
+    inject_to: [planner-structure, planner-behavior]
+    kb_hint: "安全领域：关注已知攻击模式、CVE案例、纵深防御最佳实践。"
+
+  api_design:
+    search_queries:
+      - "{topic} API设计最佳实践 REST GraphQL gRPC {year}"
+      - "{topic} API版本策略 向后兼容 breaking changes"
+      - "{topic} API安全 OWASP API Top 10 鉴权"
+    inject_to: [planner-structure]
+    kb_hint: "API设计领域：关注版本策略、向后兼容、命名约定。"
+
+  performance:
+    search_queries:
+      - "{topic} 性能优化 延迟预算 吞吐量基准 {year}"
+      - "{topic} 常见性能陷阱 反模式 缓存策略"
+    inject_to: [planner-behavior]
+    kb_hint: "性能领域：关注延迟基准、缓存策略、常见陷阱。"
+
+  data_engineering:
+    search_queries:
+      - "{topic} 数据管道最佳实践 ETL 数据质量 {year}"
+      - "{topic} 数据血缘追踪 schema演进 数据治理"
+    inject_to: [planner-structure]
+    kb_hint: "数据工程领域：关注数据质量、血缘追踪、schema演进策略。"
+
+  frontend:
+    search_queries:
+      - "{topic} 前端最佳实践 可访问性 WCAG 响应式 {year}"
+      - "{topic} 浏览器兼容性 性能优化 Core Web Vitals"
+      - "{topic} 前端安全 XSS CSRF CSP {year}"
+    inject_to: [planner-structure, planner-behavior]
+    kb_hint: "前端领域：关注可访问性(WCAG)、浏览器兼容、Core Web Vitals、XSS/CSRF防护。"
+
+  devops:
+    search_queries:
+      - "{topic} CI/CD最佳实践 容器化 部署策略 {year}"
+      - "{topic} 可观测性 监控 告警 SLO 错误预算"
+      - "{topic} 基础设施即代码 安全左移 {year}"
+    inject_to: [planner-structure, planner-behavior]
+    kb_hint: "DevOps领域：关注CI/CD最佳实践、可观测性、IaC安全。"
+
+  general:
+    search_queries:
+      - "{topic} 最佳实践 设计模式 {year}"
+      - "{topic} 常见陷阱 反模式"
+    inject_to: [planner-structure, planner-behavior]
+    kb_hint: "通用领域：关注最佳实践和常见陷阱。"
+
+# 检索控制参数
+control:
+  max_searches: 3           # 最大 WebSearch 次数
+  total_timeout_s: 5        # 总超时，超时自动降级跳过
+  results_per_search: 3     # 每次提取的关键发现数量（1-5）
+  cache_ttl: session        # 缓存策略：session 内复用同 domain 结果
+  degrade_on_timeout: true  # 超时自动跳过，不阻塞流水线
+
+# 占位符替换规则
+# {topic}: 从 task 描述中提取的主题词（去除动词/连接词，保留核心名词）
+# {year}: 当前年份 + 前 1 年，如 "2025 2026"

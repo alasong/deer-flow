@@ -1,0 +1,166 @@
+# PDF 强引擎蓝图 — ANALYSIS 模式
+#
+# 专门为纯分析/研究/审计/设计评审等非代码任务设计。
+# 核心差异 vs lite/standard/full：
+#   1. 零 P0 前置节点（无 precheck/sanitize/scope/kb/...）→ 直奔分析
+#   2. Plan 完成分析产出（analyze → review → converge）
+#   3. Do 做格式化整理
+#   4. Check 做质量自检
+#   5. Act 标准化输出
+#   6. 全 llm_converge（无 spawn），auto-approve 默认
+#
+# 适用：数据分析、架构评审、设计分析、技术调研、竞品分析
+
+name: "PDF Analysis Blueprint"
+version: "1.0.0"
+channel: analysis
+
+stages:
+  # ================================================================
+  # Plan — 核心分析阶段
+  # 无 P0 前置节点，直接从分析开始
+  # ================================================================
+  plan:
+    entry_gate:
+      artifacts: []
+      on_fail: block
+
+    nodes:
+      - ref: P1_analyze
+        type: llm_converge
+        deps: []
+        retry: 2
+        artifacts: [analysis_output.md]
+        description: >
+          分析 — 阅读源材料+任务，生成深度分析。
+          LLM 直接输出 analysis_output.md（不 spawn）。
+
+      - ref: P2_review
+        type: llm_converge
+        deps: [P1_analyze]
+        retry: 2
+        artifacts: [analysis_review.md]
+        description: >
+          自审 — 审查分析质量，标记缺失/矛盾/模糊点。
+          聚焦：是否有逻辑跳跃？是否有未验证的假设？
+          是否有遗漏的维度？
+
+      - ref: P3_converge
+        type: llm_converge
+        deps: [P2_review]
+        retry: 2
+        artifacts: [plan_decisions.yaml]
+        description: >
+          收敛 — 融合审查意见，更新分析产出。
+          处理 reviewer 标记的每个问题，给出最终版本。
+
+      - ref: PLAN_APPROVE
+        type: manual_checkpoint
+        deps: [P3_converge]
+        retry: 0
+        auto_approve: true
+        prompt: "分析完成。进入 Do 阶段？[auto-approve]"
+
+    transitions:
+      # auto_approve=true 始终 emit design_approved，无 design_flaw 回退
+      - event: design_approved
+        target: __exit__
+        max_loops: 1
+        desc: "分析获批 — 进入 Do 阶段"
+
+  # ================================================================
+  # Do — 格式化整理
+  # 分析结果已在 Plan 完成，此处整理格式
+  # ================================================================
+  do:
+    entry_gate:
+      artifacts: [analysis_output.md]
+      on_fail: block
+
+    nodes:
+      - ref: D1_format
+        type: llm_converge
+        deps: []
+        retry: 1
+        artifacts: [formatted_output.md]
+        description: >
+          格式化 — 将分析结果整理为结构化文档。
+          添加目录、章节标题、引用标注。
+
+    transitions:
+      - event: done
+        target: __exit__
+        max_loops: 1
+        desc: "格式化完成 — 进入 Check"
+
+  # ================================================================
+  # Check — 质量自检
+  # ================================================================
+  check:
+    entry_gate:
+      artifacts: [formatted_output.md]
+      on_fail: block
+
+    nodes:
+      - ref: C1_verify
+        type: llm_converge
+        deps: []
+        retry: 1
+        artifacts: [check_report.md]
+        description: >
+          校验 — 检查分析报告质量。
+          确认：结论可追溯、论据完整、来源标注清晰。
+
+      - ref: C2_repair_gate
+        type: repair_gate
+        deps: [C1_verify]
+        retry: 1
+        artifacts: [repair_decisions.yaml]
+        description: "修复门 — 三路路由（clean/bug/design_flaw）"
+
+    transitions:
+      - event: clean
+        target: __exit__
+        max_loops: 1
+        desc: "质量通过 — 进入 Act"
+      - event: bug
+        target: do.D1_format
+        reset: [do.D1_format]
+        max_loops: 1
+        desc: "格式问题 — 回滚到 Do 修复"
+      - event: design_flaw
+        target: plan
+        reset: [plan.P1_analyze, plan.P2_review, plan.P3_converge, plan.PLAN_APPROVE]
+        max_loops: 2
+        desc: "分析缺陷 — 回滚到 Plan 重新分析"
+
+  # ================================================================
+  # Act — 标准化输出
+  # ================================================================
+  act:
+    entry_gate:
+      artifacts: [check_report.md]
+      on_fail: warn
+
+    nodes:
+      - ref: A1_standardize
+        type: llm_converge
+        deps: []
+        retry: 2
+        artifacts: [act_report.md]
+        description: >
+          标准化 — 生成最终分析报告（act_report.md）。
+          包含：执行概要、分析结论、论据链、假设清单。
+
+      - ref: A2_evolve
+        type: engine_exec
+        command: pdf-engine.py knowledge append-ts
+        deps: [A1_standardize]
+        retry: 1
+        description: "经验沉淀（如有值得记录的点）"
+
+    transitions:
+      - event: done
+        target: __final__
+        max_loops: 1
+        desc: "分析完成 — cycle 结束"

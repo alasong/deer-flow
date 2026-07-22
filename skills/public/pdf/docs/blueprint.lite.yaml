@@ -1,0 +1,166 @@
+# PDF 强引擎蓝图 — LITE 模式
+#
+# 最小化单 Agent 拓扑：无 llm_spawn 节点，全部由主 LLM 直接执行
+# 无审查环节（跳过 P2_review / D2_review），无对抗
+# 最小 Check + 基础 Act
+# 适用：分析/研究/简单 bugfix/文档/配置修改
+
+name: "PDF Lite Blueprint"
+version: "2.0.0"
+channel: lite
+
+stages:
+  # ================================================================
+  # Plan — 最小方案设计
+  # ================================================================
+  plan:
+    entry_gate:
+      artifacts: []
+      on_fail: block
+
+    nodes:
+      - ref: P0_precheck
+        type: engine_exec
+        command: pdf-engine.py precheck run
+        deps: []
+        retry: 1
+        description: "前置检查（引擎预检）"
+
+      - ref: P0_scope
+        type: engine_exec
+        command: pdf-engine.py scope classify
+        deps: [P0_precheck]
+        retry: 1
+        description: "上下文范围检测"
+
+      - ref: P1_design
+        type: llm_converge
+        deps: [P0_scope]
+        retry: 2
+        artifacts: [plan_decisions.yaml]
+        description: "方案设计 — 单 Agent 直接输出（不 spawn）"
+
+      - ref: PLAN_APPROVE
+        type: manual_checkpoint
+        deps: [P1_design]
+        retry: 0
+        auto_approve: true
+        prompt: "Plan 已完成。确认进入 Do 阶段？[auto-approve]"
+
+    transitions:
+      - event: design_approved
+        target: __exit__
+        max_loops: 1
+        desc: "Plan 获批 — 进入 Do 阶段"
+
+      - event: design_flaw
+        target: plan.P1_design
+        reset: [plan.P1_design, plan.PLAN_APPROVE]
+        max_loops: 1
+        desc: "设计缺陷 — 回滚到 P1 重新设计"
+
+  # ================================================================
+  # Do — 单 Agent 实现
+  # ================================================================
+  do:
+    entry_gate:
+      artifacts: [plan.md]
+      on_fail: block
+
+    nodes:
+      - ref: D0_prepare
+        type: engine_exec
+        command: pdf-engine.py context bundle
+        deps: []
+        retry: 1
+        description: "上下文准备"
+
+      - ref: D1_doer
+        type: llm_converge
+        deps: [D0_prepare]
+        retry: 2
+        artifacts: [merged.md]
+        description: "实现 — 单 Agent 直接产出 merged.md（不 spawn，不 merge）"
+
+      - ref: D3_fix
+        type: repair_gate
+        deps: [D1_doer]
+        retry: 1
+        artifacts: [repair_decisions.yaml]
+        description: "修复门 — P1 记录到结论（不修复）"
+
+    transitions:
+      - event: done
+        target: __exit__
+        max_loops: 1
+        desc: "Do 完成 — 进入 Check 阶段"
+
+      - event: bug
+        target: do.D1_doer
+        reset: [do.D1_doer, do.D3_fix]
+        max_loops: 1
+        desc: "实现 bug — 回滚到 D1 重新实现"
+
+  # ================================================================
+  # Check — 最小校验
+  # ================================================================
+  check:
+    entry_gate:
+      artifacts: [merged.md]
+      on_fail: block
+
+    nodes:
+      - ref: C1_check
+        type: llm_converge
+        deps: []
+        retry: 1
+        artifacts: [check_report.md]
+        description: "校验 — 单 Agent 自检（不 spawn）"
+
+      - ref: C2_repair_gate
+        type: repair_gate
+        deps: [C1_check]
+        retry: 1
+        artifacts: [repair_decisions.yaml]
+        description: "修复门 — 仅 clean/bug 两路路由"
+
+    transitions:
+      - event: clean
+        target: __exit__
+        max_loops: 1
+        desc: "全部通过 — 进入 Act"
+
+      - event: bug
+        target: do
+        reset: [do.*]
+        max_loops: 1
+        desc: "P1 bug — 回滚到 Do"
+
+  # ================================================================
+  # Act — 基础标准化
+  # ================================================================
+  act:
+    entry_gate:
+      artifacts: [check_report.md]
+      on_fail: warn
+
+    nodes:
+      - ref: A1_standardize
+        type: llm_converge
+        deps: []
+        retry: 2
+        artifacts: [act_report.md]
+        description: "标准化 — 生成 act_report"
+
+      - ref: A2_evolve
+        type: engine_exec
+        command: pdf-engine.py knowledge append-ts
+        deps: [A1_standardize]
+        retry: 1
+        description: "技术栈经验沉淀"
+
+    transitions:
+      - event: done
+        target: __final__
+        max_loops: 1
+        desc: "Act 完成 — cycle 结束"

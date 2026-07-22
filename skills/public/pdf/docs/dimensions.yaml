@@ -1,0 +1,94 @@
+# dimensions.yaml — Single source of truth for PDD review dimensions
+# This file is the authoritative source. SKILL.md and risk-profile.md
+# reference it. Run scripts/lint-dimensions.sh to verify consistency.
+#
+# Version: 1.0
+# Last updated: 2026-06-02
+
+dimensions:
+  - name: correctness
+    label: "correctness"
+    always: true
+    trigger: "始终"
+    focus: "Plan合规、逻辑bug、边界处理、控制流"
+    m_scale: 1
+    checklist_ref: "docs/reviewer-checklists.md#correctness"
+
+  - name: security
+    label: "security"
+    always: false
+    trigger: "鉴权/输入/敏感数据/权限/文件路径/注入面"
+    focus: "OWASP Top10、校验完备、日志泄漏、硬编码密钥"
+    m_scale: 2
+    checklist_ref: "docs/reviewer-checklists.md#security"
+
+  - name: performance
+    label: "performance"
+    always: false
+    trigger: "循环内IO/新DB查询/缓存/热路径/大数据/并发"
+    focus: "N+1查询、无界循环、缺索引、内存分配、阻塞IO"
+    m_scale: 3
+    checklist_ref: "docs/reviewer-checklists.md#performance"
+
+  - name: api_design
+    label: "api_design"
+    always: false
+    trigger: "公开API/breaking change/SDK/RPC/schema"
+    focus: "命名一致性、错误格式、向后兼容、版本策略、分页"
+    m_scale: 3
+    checklist_ref: "docs/reviewer-checklists.md#api_design"
+
+  - name: test_quality
+    label: "test_quality"
+    always: false
+    trigger: "复杂逻辑/多分支/已知边缘/覆盖率缺口"
+    focus: "缺失路径、断言充分性、边缘用例、mock合理性"
+    m_scale: 4
+    checklist_ref: "docs/reviewer-checklists.md#test_quality"
+
+  - name: maintainability
+    label: "maintainability"
+    always: false
+    trigger: "公共库/shared module/长期维护/抽象设计"
+    focus: "DRY、耦合、命名、函数长度、单一职责"
+    m_scale: 4
+    checklist_ref: "docs/reviewer-checklists.md#maintainability"
+
+  - name: reliability
+    label: "reliability"
+    always: false
+    trigger: "关键路径/消息队列/外部调用/持久化"
+    focus: "错误完备性(无裸panic)、重试退避、超时context、可观测性、幂等"
+    m_scale: 5
+    checklist_ref: "docs/reviewer-checklists.md#reliability"
+
+  - name: data_privacy
+    label: "data_privacy"
+    always: false
+    trigger: "PII收集/用户数据/合规要求/第三方共享"
+    focus: "GDPR/CCPA/HIPAA、脱敏、留存策略、数据分类、用户权利"
+    m_scale: 8
+    checklist_ref: "docs/reviewer-checklists.md#data_privacy"
+
+# M scale quick reference
+m_scale:
+  "1": "correctness only — 内部工具/log格式"
+  "2": "+security — 用户数据+鉴权"
+  "3": "+api_design — 公开API+性能关键"
+  "4": "+test_quality — 高复杂度+多边缘"
+  "5-7": "全维度（不含data_privacy）— 认证系统重写"
+  "8": "+data_privacy — 个人数据/合规"
+
+# Version tracking
+version:
+  current: "1.0"
+  changelog:
+    - version: "1.0"
+      date: "2026-06-02"
+      changes:
+        - "初始版本，统一SKILL.md和risk-profile.md的维度定义"
+
+# Migration tracking
+# When renaming a dimension, add old name here so cycle-log queries still match
+renamed: []
+deprecated: []
