@@ -15,6 +15,9 @@
     "preview": "next build && next start",
     "start": "next start",
     "test": "rstest",
+    "test:watch": "rstest --watch",
+    "test:changed": "rstest --changed",
+    "test:quick": "rstest --pool.type threads --bail 1",
     "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit"
   },

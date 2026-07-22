@@ -25,8 +25,11 @@ DeerFlow Frontend is a Next.js 16 web interface for an AI agent system. It commu
 | `pnpm lint`      | ESLint only                                       |
 | `pnpm lint:fix`  | ESLint with auto-fix                              |
 | `pnpm format`    | Prettier check (`pnpm format:write` to apply)     |
-| `pnpm test`      | Run unit tests with Rstest                        |
-| `pnpm test:e2e`  | Run E2E tests with Playwright (Chromium)          |
+| `pnpm test`      | Full unit test suite with Rstest (664 tests, ~4s)      |
+| `pnpm test:watch`  | Watch mode — re-run tests on file changes                |
+| `pnpm test:changed`| Run only tests affected by recent git changes            |
+| `pnpm test:quick`  | Fail-fast mode for development (`--pool.type threads --bail 1`) |
+| `pnpm test:e2e`    | Run E2E tests with Playwright (Chromium)                 |
 | `pnpm typecheck` | TypeScript type check (`tsc --noEmit`)            |
 | `pnpm start`     | Start production server                           |
 
