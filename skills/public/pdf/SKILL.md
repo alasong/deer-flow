@@ -1,6 +1,7 @@
 ---
 name: pdf
 description: "强引擎蓝图驱动 PDCA 流水线：固定拓扑 + HSM 状态机 + Pipeline 调度 + 约束门禁"
+argument-hint: "<任务描述> [--plan-only | --resume <task_slug> | --new] [--session-slug <slug>] [--append] [--no-detect-overlap]"
 ---
 
 # /pdf — 强引擎蓝图驱动 PDCA 流水线
@@ -75,6 +76,7 @@ python3 skills/pdf/tools/pdf-engine.py blueprint load <name>
 | `llm_converge` | 读取同一阶段中前序节点的所有产出，合并/收拢为一份连贯的文档。**输出文件必须写入 session 目录**：先通过 `artifact resolve-path <filename>` 获取完整路径，写入后调用 `artifact add --move <filename> <role>` 注册并移动到 session artifacts 目录。→`node-done`。 | `pipeline node-done <stage> <ref>` |
 | `llm_merge` | 读取多个 doer 的输出，将它们合并为一个统一的输出。路径规则同 `llm_converge`。→`node-done`。 | `pipeline node-done <stage> <ref>` |
 | `repair_gate` | 评估修复决策。读取修复报告，决定：**fix** → 重新运行 doer 节点；**rollback** → 触发 HSM 回滚事件；**act** → 放行通过。→`node-done`。 | `pipeline node-done <stage> <ref>` + 可选 `hsm event` |
+| `goal_doer` | **Spawn Goal-mode agent for autonomous iteration.** Read `spawn_role`, `max_continuations`, `evaluator_prompt`, and `artifacts` from the node definition. Build context bundle with `context bundle build <stage> --role <spawn_role>`. Spawn a subagent whose prompt embeds the goal objective + evaluator_prompt as the completion criterion. After the spawned agent returns, evaluate the output against evaluator_prompt. If criteria are met → call `node-done`; otherwise verify if artifact files exist (check via `artifact list` or `ls`). This is an **autonomous iteration** node: the LLM may re-spawn with updated context if the previous attempt was incomplete. Suitable for nodes that require exploration, iterative refinement, or open-ended problem-solving where Goal-style autonomous continuation is beneficial. | `pipeline node-done <stage> <ref>` |
 | `manual_checkpoint` | **阻塞节点，两步流程：** (a) LLM 先调用 `node-done <stage> <ref>` → 引擎返回 `checkpoint_blocked` 状态，不自动 tick。(b) 常规模式：向用户展示确认 prompt；**auto 模式**（state.auto_mode=true 且节点 auto_approve=true）：LLM 自动评估通过条件后直接调用 `pass-checkpoint`，无需询问用户。 | 先 `pipeline node-done <stage> <ref>`，再根据模式调用 `pipeline pass-checkpoint\|reject-checkpoint <stage> <ref>` |
 
 ---
@@ -117,6 +119,7 @@ PDF 使用 Make 风格的调度循环。LLM 和引擎交替工作:
    - engine_exec: 运行节点中定义的 CLI command
    - llm_spawn: spawn 子 Agent 完成工作（参考 role-packs + context bundle build）
    - llm_converge / llm_merge: 读前序产出 → 合并收敛
+   - goal_doer: spawn Goal-mode agent with evaluator_prompt, autonomously iterate until criteria met (max_continuations cap)。子 agent 返回后 LLM 自行判断是否完成，未完成则再次 spawn 直至 evaluator_prompt 条件满足。产出物通过 artifact add 注册。
    - repair_gate: 读修复报告 → 决策修复/回滚/放行
    - manual_checkpoint: 两步流程（见 Node Type Reference）
 

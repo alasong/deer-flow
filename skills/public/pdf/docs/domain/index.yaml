@@ -1,0 +1,20 @@
+# index.yaml — Domain registry and matching configuration
+# Read by PDD P0 to determine domain from task keywords.
+# Add a new domain: append to domains list + match_order, then create <domain>.yaml.
+
+domains:
+  - security
+  - api_design
+  - performance
+  - data_engineering
+  - frontend
+  - devops
+  - general
+
+default: general
+
+# Match order: higher priority first. First domain whose keywords match wins.
+match_order: [security, data_engineering, api_design, performance, frontend, devops, general]
+
+# Map of domain → config file (convention: docs/domain/<name>.yaml)
+# general is the fallback — always matches, always exists.

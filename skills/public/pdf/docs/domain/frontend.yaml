@@ -1,0 +1,69 @@
+# frontend.yaml — Domain knowledge for frontend tasks
+name: frontend
+version: 1
+
+classification:
+  priority: 5
+  keywords:
+    - component
+    - UI
+    - a11y
+    - accessibility
+    - CSS
+    - 组件
+    - 前端
+    - 界面
+    - 可访问性
+    - 无障碍
+    - 样式
+    - 浏览器
+    - 响应式
+
+analysis:
+  default_n: 0                        # Not force-activated; only for complex tasks
+  n_override:
+    - when: {output_kind: architecture}
+      n: 1
+  skip_when: [config, docs, bugfix]
+  skip_plan_only_when: [audit, report]
+
+  partitions:
+    - name: general
+      focus:
+        - "浏览器兼容性与可访问性（WCAG）约束分析"
+        - "Core Web Vitals 性能基线评估"
+        - "XSS/CSRF/CSP 前端安全风险评估"
+        - "组件复用性与设计系统一致性"
+      output: analysis_general.md
+
+external_intel:
+  search_queries:
+    - "{topic} 前端最佳实践 可访问性 WCAG 响应式 {year}"
+    - "{topic} 浏览器兼容性 性能优化 Core Web Vitals"
+    - "{topic} 前端安全 XSS CSRF CSP {year}"
+  kb_hint: "前端领域：关注可访问性(WCAG)、浏览器兼容、Core Web Vitals、XSS/CSRF防护。"
+  max_searches: 3
+
+design_templates:
+  architecture: "问题背景→设计系统→架构原则→组件树→数据流→路由→部署→路线图"
+  feature: "用户场景→验收标准→组件设计→状态管理→可访问性→测试策略→上线计划"
+  refactor: "现状分析→组件重构→分步策略→兼容性→视觉回归→回滚方案"
+  bugfix: "根因分析→修复方案→回归测试→影响范围→预防措施"
+  audit/report: "评估范围→UX基线→可访问性审计→风险排序→建议→行动计划"
+
+review_extensions:
+  - dimension: correctness
+    extra_checks:
+      - "可访问性（a11y）：焦点管理、ARIA 标签、键盘导航"
+      - "响应式断点是否覆盖目标设备范围"
+
+# === v2: Model Tier Overrides ===
+# Frontend changes have lower blast radius — use default model tier
+model_tier_overrides:
+  plan:
+    design: sonnet
+
+evolution:
+  last_updated: 2026-06-03
+  cycles_contributed: 0
+  promoted_findings: []

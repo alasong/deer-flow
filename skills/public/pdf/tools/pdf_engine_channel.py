@@ -10,13 +10,6 @@ try:
 except ImportError:
     yaml = None
 
-try:
-    from deerflow.skills.router.classifier import SkillClassifier as _SkillClassifier
-
-    _HAS_SKILL_CLASSIFIER = True
-except ImportError:
-    _HAS_SKILL_CLASSIFIER = False
-
 from pdf_engine_shared import (
     SKILL_DIR,
     FACTOR_TAXONOMY,
@@ -134,24 +127,8 @@ def cmd_channel_auto():
                 print(f"channel={fc} factor={fname} (auto)")
                 return
 
-    # 4. Auto-classify from task text — uses the new SkillClassifier (router module)
-    #    when available (running inside deerflow backend), with graceful fallback to
-    #    the inline keyword matcher for standalone PDF engine usage.
-    if _HAS_SKILL_CLASSIFIER:
-        classifier = _SkillClassifier()
-        _ctx = classifier.classify(task_text)
-        # Map classifier task_type → PDF engine output_kind
-        _task_to_output_kind = {
-            "analysis": "analysis",
-            "research": "research",
-            "planning": "planning",
-            "implementation": "feature",
-            "query": "feature",
-        }
-        output_kind = _task_to_output_kind.get(_ctx.task_type, "feature")
-        confidence = "high" if _ctx.complexity == "high" else "medium"
-    else:
-        output_kind, confidence = _auto_classify_output_kind(task_text)
+    # 4. Auto-classify output_kind from task text
+    output_kind, confidence = _auto_classify_output_kind(task_text)
 
     # 5. output_kind → channel mapping
     kind_to_channel = {
@@ -198,37 +175,13 @@ def _compute_n_check(channel, n_do, channel_rules=None):
         if isinstance(profile, dict):
             n_formula = profile.get("n_check_formula", "min(1,n_do)")
             try:
-                return _eval_n_formula(n_formula, n_do)
+                return eval(n_formula, {"n_do": n_do, "min": min, "max": max})
             except Exception:
                 return min(1, n_do)
         n_static = profile.get("n", 1)
         if isinstance(n_static, int):
             return n_static
     return min(1, n_do)
-
-
-def _eval_n_formula(formula: str, n_do: int) -> int:
-    """Safely evaluate a limited set of N-formulas without eval()."""
-    # Only the following patterns are supported:
-    stripped = formula.replace(" ", "")
-    if stripped == "min(1,n_do)":
-        return min(1, n_do)
-    if stripped == "min(2,n_do)":
-        return min(2, n_do)
-    if stripped == "min(3,n_do)":
-        return min(3, n_do)
-    if stripped == "n_do":
-        return n_do
-    if stripped == "max(1,n_do)":
-        return max(1, n_do)
-    if stripped == "max(2,n_do)":
-        return max(2, n_do)
-    if stripped.startswith("n_do+"):
-        try:
-            return n_do + int(stripped[len("n_do+"):])
-        except ValueError:
-            raise ValueError(f"Unsupported formula: {formula}")
-    raise ValueError(f"Unsupported formula: {formula}")
 
 
 def _get_domain_model_override(domain, stage, role):

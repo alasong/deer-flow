@@ -1,0 +1,117 @@
+# security.yaml — Domain knowledge for security-related tasks
+name: security
+version: 1
+
+# === P0 Classification ===
+classification:
+  priority: 1
+  keywords:
+    - auth
+    - crypto
+    - token
+    - CVE
+    - 注入
+    - 鉴权
+    - 加密
+    - 签名
+    - OAuth
+    - JWT
+    - CSRF
+    - XSS
+    - 认证
+    - 授权
+    - 漏洞
+    - 攻击
+    - 渗透
+    - 安全
+
+# === P0.7 Analysis ===
+analysis:
+  default_n: 1                        # Force-activated for security
+  n_override:
+    - when: {output_kind: architecture}
+      n: 2                           # Architecture → external + internal
+  skip_when: []                       # Security never skips analysis
+  skip_plan_only_when: [audit, report]
+
+  partitions:
+    - name: external
+      focus:
+        - "搜集具体 CVE 编号、CVSS 分数、真实攻击案例（非泛泛 OWASP Top 10）"
+        - "行业数据基线（基准测试、研究报告、泄露统计）"
+        - "竞品/同类方案对比（已知盲区是什么？为什么传统方案不够？）"
+        - "已知攻击模式与最新攻击向量"
+      output: analysis_external.md
+    - name: internal
+      focus:
+        - "威胁面识别与攻击路径映射"
+        - "约束条件梳理（延迟预算、语言/框架限制、合规要求）"
+        - "隐含假设验证（哪些假设不成立会导致方案崩溃？）"
+        - "差距评估（当前状态 vs 目标状态的缺口）"
+      output: analysis_internal.md
+    - name: general  # used when N=1
+      focus:
+        - "兼顾外部情报与内部约束分析，聚焦安全领域的关键风险与差距"
+      output: analysis_general.md
+
+# === P0.6 External Intel ===
+external_intel:
+  search_queries:
+    - "{topic} 已知攻击模式 CVE OWASP {year}"
+    - "{topic} 行业安全基线 最佳实践 纵深防御 {year}"
+    - "{topic} 安全架构 零信任 供应链安全 {year}"
+  kb_hint: "安全领域：关注已知攻击模式、CVE案例、纵深防御最佳实践。"
+  max_searches: 3
+
+# === P1 Design Templates ===
+design_templates:
+  architecture: "问题背景→威胁模型→架构原则→分层设计→安全控制→部署拓扑→路线图"
+  feature: "用户场景→验收标准→安全设计→边界条件→测试策略→上线计划"
+  refactor: "现状分析→重构目标→分步策略→兼容性→安全风险评估→回滚方案"
+  bugfix: "根因分析→修复方案→回归测试→影响范围→预防措施"
+  audit/report: "评估范围→对比基线→差距分析→风险排序→建议→行动计划"
+
+# === Domain-Specific Review Extensions ===
+review_extensions:
+  - dimension: security
+    extra_checks:
+      - "STRIDE 威胁建模是否覆盖所有信任边界"
+      - "加密算法是否支持密钥轮换"
+      - "是否检查了所有状态变更请求的 CSRF 防护"
+
+# === Evolution ===
+evolution:
+  last_updated: 2026-06-03
+  cycles_contributed: 0
+  promoted_findings: []
+
+# === v2: Model Tier Overrides ===
+# Override priority: CLI --model-tier > domain overrides > model_tier.default
+model_tier_overrides:
+  do:
+    p1: sonnet              # Security implementation default = sonnet (v1 was haiku)
+    p2:
+      correctness: sonnet
+      security: sonnet
+      default: sonnet       # Security review default = sonnet (v1 default was haiku)
+    upgrade:
+      trigger_m: 2          # M>=2 triggers opus upgrade (v1 was M>=3)
+      to: opus
+  check:
+    p1: sonnet
+    p2: opus                # Security check default = opus (v1 default was sonnet)
+    upgrade:
+      trigger_m: 2
+      to: opus
+  act:
+    p1: sonnet
+    p2: sonnet
+    upgrade:
+      trigger_m: 3
+      to: opus
+
+# === v2: MADE Overrides ===
+made_overrides:
+  trigger_depth: 1           # Security tasks trigger MADE at depth=1 (v1 default was 2)
+  n_explorers: {min: 2, max: 3}
+  always_explore: true       # Security always triggers MADE

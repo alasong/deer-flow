@@ -1,0 +1,45 @@
+# general.yaml — Fallback domain for tasks without a specific domain match
+name: general
+version: 1
+
+classification:
+  priority: 99                        # Always last in match order
+  keywords: []                        # Matches everything (fallback)
+
+analysis:
+  default_n: 0                        # No analysis by default
+  n_override: []
+  skip_when: [config, docs]           # Skip for simple tasks
+  skip_plan_only_when: [audit, report]
+
+  partitions:
+    - name: general
+      focus:
+        - "问题域关键约束与风险识别"
+        - "与现有架构的一致性和冲突分析"
+      output: analysis_general.md
+
+external_intel:
+  search_queries:
+    - "{topic} 最佳实践 设计模式 {year}"
+    - "{topic} 常见陷阱 反模式"
+  kb_hint: "通用领域：关注最佳实践和常见陷阱。"
+  max_searches: 3
+
+design_templates:
+  architecture: "问题背景→威胁/约束→架构原则→分层设计→模块契约→数据流→部署→路线图"
+  feature: "用户场景→验收标准→设计方案→边界条件→测试策略→上线计划"
+  refactor: "现状分析→重构目标→分步策略→兼容性→风险评估→回滚方案"
+  bugfix: "根因分析→修复方案→回归测试→影响范围→预防措施"
+  audit/report: "评估范围→对比基线→差距分析→风险排序→建议→行动计划"
+
+review_extensions: []
+
+# === v2: Model Tier Overrides ===
+# General is the fallback domain — no overrides, use default model tier
+model_tier_overrides: {}  # covered by spawn-config.yaml domain_model_defaults.general
+
+evolution:
+  last_updated: 2026-06-03
+  cycles_contributed: 0
+  promoted_findings: []

@@ -1,0 +1,34 @@
+# Blueprint index — select blueprint by channel (lite/standard/full)
+# Engine auto-selects from state.channel after channel_select phase.
+# Fallback chain: state.channel → "full" → "default" → blueprint.yaml
+
+blueprints:
+  default:
+    file: blueprint.full.yaml
+    description: "FULL 模式 — 多 Agent 拓扑，默认使用。N 设计者 + M 审查者 + 对抗"
+    channels: [full]
+
+  full:
+    file: blueprint.full.yaml
+    description: "FULL 模式 — 全量多 Agent 拓扑，严格 spawn，Plan→Do→Check→Act 完整链路"
+    channels: [full]
+
+  standard:
+    file: blueprint.std.yaml
+    description: "STANDARD 模式 — 固定多 Agent 拓扑，review 始终执行，无对抗审查"
+    channels: [standard]
+
+  lite:
+    file: blueprint.lite.yaml
+    description: "LITE 模式 — 单 Agent 直通，无 llm_spawn，最小 Check，auto-approve 默认"
+    channels: [lite]
+
+  analysis:
+    file: blueprint.analysis.yaml
+    description: "ANALYSIS 模式 — 纯分析/研究/审计。零 P0 前置节点，直奔分析，全 llm_converge"
+    channels: [analysis]
+
+  planning:
+    file: blueprint.planning.yaml
+    description: "PLANNING 模式 — 项目需求到迭代规划。全 llm_converge，P2 架构多方案，用户确认 checkpoint，五路 Check 路由"
+    channels: [planning]

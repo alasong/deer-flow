@@ -82,7 +82,7 @@ def validate_blueprint(data):
             ntype = n.get("type")
             if ntype not in ("engine_exec", "llm_spawn", "llm_merge", "llm_converge",
                              "engine_diff", "repair_gate", "manual_checkpoint",
-                             "engine_diff + llm_converge"):
+                             "engine_diff + llm_converge", "goal_doer"):
                 errors.append(f"stage '{sname}' node '{ref}': unknown type '{ntype}'")
             if n.get("retry") is not None and (not isinstance(n["retry"], int) or n["retry"] < 0):
                 errors.append(f"stage '{sname}' node '{ref}': invalid retry={n['retry']}")

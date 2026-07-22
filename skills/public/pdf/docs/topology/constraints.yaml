@@ -1,0 +1,47 @@
+# Constraints — cross-stage integrity gates
+#
+# Engine evaluates these before transitions or node execution.
+# on_fail: block | warn | info
+
+constraints:
+  - name: plan_decisions_exist
+    type: file_exists
+    target: plan_decisions.yaml
+    on_fail: block
+    stage: plan
+    run_before: plan_review
+
+  - name: plan_md_exists
+    type: file_exists
+    target: plan.md
+    on_fail: block
+    stage: plan
+    run_before: plan_exit
+
+  - name: do_sections_exist
+    type: file_exists
+    target: do_output_*.md
+    on_fail: block
+    stage: do
+    run_before: do_exit
+
+  - name: check_reports_exist
+    type: file_exists
+    target: check_report_*.md
+    on_fail: block
+    stage: check
+    run_before: check_exit
+
+  - name: act_report_exists
+    type: file_exists
+    target: act_report.md
+    on_fail: warn
+    stage: act
+    run_before: act_exit
+
+  - name: plan_decisions_consistency
+    type: m_value_consistency
+    target: ""
+    on_fail: warn
+    stage: plan
+    run_before: plan_exit

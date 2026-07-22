@@ -1,0 +1,75 @@
+# devops.yaml — Domain knowledge for DevOps/infra tasks
+name: devops
+version: 1
+
+classification:
+  priority: 6
+  keywords:
+    - CI
+    - CD
+    - deploy
+    - Docker
+    - K8s
+    - Kubernetes
+    - Helm
+    - infra
+    - 部署
+    - 容器
+    - 发布
+    - 监控
+    - 告警
+    - 可观测性
+    - SLO
+    - 运维
+
+analysis:
+  default_n: 0                        # Not force-activated; only for complex tasks
+  n_override:
+    - when: {output_kind: architecture}
+      n: 1
+  skip_when: [config, docs, bugfix]
+  skip_plan_only_when: [audit, report]
+
+  partitions:
+    - name: general
+      focus:
+        - "CI/CD 流水线变更影响与回滚安全分析"
+        - "容器化/编排策略与资源限制评估"
+        - "可观测性覆盖（日志、指标、追踪）差距分析"
+        - "部署策略（金丝雀、蓝绿、滚动）风险对比"
+      output: analysis_general.md
+
+external_intel:
+  search_queries:
+    - "{topic} CI/CD最佳实践 容器化 部署策略 {year}"
+    - "{topic} 可观测性 监控 告警 SLO 错误预算"
+    - "{topic} 基础设施即代码 安全左移 {year}"
+  kb_hint: "DevOps领域：关注CI/CD最佳实践、可观测性、IaC安全。"
+  max_searches: 3
+
+design_templates:
+  architecture: "问题背景→基础设施→架构原则→部署拓扑→CI/CD→可观测性→安全→路线图"
+  feature: "用户场景→验收标准→管道设计→部署策略→监控告警→测试策略→上线计划"
+  refactor: "现状分析→基础设施重构→分步策略→兼容性→风险评估→回滚方案"
+  bugfix: "根因分析→修复方案→回归测试→影响范围→预防措施"
+  audit/report: "评估范围→基础设施基线→差距分析→风险排序→建议→行动计划"
+
+review_extensions:
+  - dimension: reliability
+    extra_checks:
+      - "部署回滚方案是否可在 5 分钟内执行"
+      - "是否有资源限制（CPU/内存）和健康检查配置"
+
+# === v2: Model Tier Overrides ===
+# Infra changes have high blast radius — deploy/pipeline logic needs stronger models
+model_tier_overrides:
+  do:
+    p1: haiku
+    upgrade:
+      trigger_m: 3          # M>=3 triggers opus upgrade (v1 was M>=5)
+      to: opus
+
+evolution:
+  last_updated: 2026-06-03
+  cycles_contributed: 0
+  promoted_findings: []
