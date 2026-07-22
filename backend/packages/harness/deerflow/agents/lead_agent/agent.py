@@ -479,6 +479,13 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
     non_interactive = bool(cfg.get("non_interactive", False))
     agent_name = validate_agent_name(cfg.get("agent_name"))
 
+    # Register in the Owner-Agent registry so external systems and other
+    # agents can discover this agent's identity and capabilities.
+    if not is_bootstrap:
+        from deerflow.agents.owner import register_agent
+
+        register_agent(agent_name, capabilities=cfg.get("capabilities", []))
+
     agent_config = load_agent_config(agent_name) if not is_bootstrap else None
     available_skills = _available_skill_names(agent_config, is_bootstrap)
     # Custom agent model from agent config (if any), or None to let _resolve_model_name pick the default

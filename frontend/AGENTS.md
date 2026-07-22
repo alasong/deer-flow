@@ -34,6 +34,32 @@ Unit tests live under `tests/unit/` and mirror the `src/` layout (e.g., `tests/u
 
 E2E tests live under `tests/e2e/` and use Playwright with Chromium. They mock all backend APIs via `page.route()` network interception and test real page interactions (navigation, chat input, streaming responses). Config: `playwright.config.ts`.
 
+### 测试策略
+
+项目采用两层测试策略，各有明确的职责边界：
+
+| 层 | 运行器 | 环境 | 职责 | 适合什么 |
+|---|---|---|---|---|
+| **单元测试** | Rstest | 纯 Node.js | 纯函数逻辑、数据转换、API 调用格式、静态渲染输出 | 工具函数、API client、状态机、cron 解析、`renderToStaticMarkup` 组件快照 |
+| **E2E 测试** | Playwright | 真实 Chromium | 用户交互、导航、按钮点击、表单提交、流式响应渲染 | 页面跳转、点击事件、输入验证、跨组件交互 |
+
+**约束（不可绕过）：**
+- 单元测试层**不支持** DOM 环境 —— 无 `jsdom`、`happy-dom`、`@testing-library/react`。
+- 带 `useEffect`/`useState`/`useCallback` 等 hooks 的 "use client" 页面组件**不要**在单元测试中渲染（hooks 不会触发）。
+- 组件交互测试（点击、输入、表单提交）必须走 E2E 测试。
+- 纯表现型组件（props in → markup out）可以使用 `renderToStaticMarkup` 做 Html 字符串断言。
+- 纯函数和数据逻辑直接测试，不需要 mock React hooks。
+
+**已有模式：**
+- `renderToStaticMarkup` + `toContain` 断言：7 个测试文件（如 `human-input-card.test.ts`）
+- `rs.mock()` / `rs.doMock("react", ...)` 模块级模拟：13 个测试文件
+- 纯 async/unit：其余 ~63 个测试文件
+- fetch mock（`rs.stubGlobal("fetch", rs.fn(...))`）用于验证请求格式，不验证后端逻辑
+
+**不推荐的做法：**
+- 为 "use client" 页面写单元测试验证交互行为（该走 E2E）
+- 在单元测试中验证后端 API 的业务逻辑（后端已有测试覆盖）
+
 ## Architecture
 
 ```

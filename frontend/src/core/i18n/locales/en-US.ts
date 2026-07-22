@@ -251,6 +251,7 @@ export const enUS: Translations = {
     demoChats: "Demo chats",
     agents: "Agents",
     scheduledTasks: "Scheduled tasks",
+    ownerDashboard: "Owner dashboard",
     agentsDisabledTooltip: "Feature not enabled",
   },
 

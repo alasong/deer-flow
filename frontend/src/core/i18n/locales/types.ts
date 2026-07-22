@@ -183,6 +183,7 @@ export interface Translations {
     agents: string;
     channels: string;
     scheduledTasks: string;
+    ownerDashboard: string;
     agentsDisabledTooltip: string;
   };
 

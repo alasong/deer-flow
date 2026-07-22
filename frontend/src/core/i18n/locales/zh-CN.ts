@@ -238,6 +238,7 @@ export const zhCN: Translations = {
     demoChats: "演示对话",
     agents: "智能体",
     scheduledTasks: "定时任务",
+    ownerDashboard: "Owner 面板",
     agentsDisabledTooltip: "功能未启用",
   },
 

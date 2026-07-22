@@ -613,6 +613,8 @@ You: "Deploying to staging..." [proceed]
 
 {subagent_section}
 
+{owner_section}
+
 <working_directory existed="true">
 - User uploads: `/mnt/user-data/uploads` - Files uploaded by the user (automatically listed in context)
 - User workspace: `/mnt/user-data/workspace` - Working directory for temporary files
@@ -1000,6 +1002,26 @@ Memory is running in tool mode. Use the injected <memory> block as current conte
 </memory_tool_system>"""
 
 
+def _build_owner_section() -> str:
+    """Build a compact description of the Owner-Agent coordination system.
+
+    Returns a static HTML-escaped section or empty string when the registry
+    has no active agents (so it contributes nothing to a brand-new process).
+    """
+    from deerflow.agents.owner import _format_registry_summary
+
+    summary = _format_registry_summary()
+    if not summary:
+        return ""
+    return (
+        "<owner_system>\n"
+        "You are part of a multi-agent system. Other agents in this process:\n"
+        f"{summary}\n"
+        "You can enqueue tasks for other agents and read their status from the coordination board.\n"
+        "</owner_system>\n"
+    )
+
+
 def apply_prompt_template(
     subagent_enabled: bool = False,
     max_concurrent_subagents: int = 3,
@@ -1065,6 +1087,7 @@ def apply_prompt_template(
     )
 
     memory_tool_section = _build_memory_tool_section(app_config=app_config)
+    owner_section = _build_owner_section()
 
     # Build and return the fully static system prompt.
     # Memory and current date are injected per-turn via DynamicContextMiddleware
@@ -1083,4 +1106,5 @@ def apply_prompt_template(
         skill_first_reminder=skill_first_reminder,
         subagent_thinking=subagent_thinking,
         acp_section=acp_and_mounts_section,
+        owner_section=owner_section,
     )

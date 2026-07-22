@@ -484,6 +484,12 @@ def test_system_prompt_template_requires_virtual_paths_for_output_images():
     assert "Call `present_files` for the image before referencing it" in template
 
 
+def test_system_prompt_template_contains_owner_section_placeholder():
+    """The owner section placeholder must exist in the template."""
+    template = prompt_module.SYSTEM_PROMPT_TEMPLATE
+    assert "{owner_section}" in template
+
+
 def test_system_prompt_template_preserves_placeholders():
     """Ensure the chunking-rule edit didn't drop any f-string placeholder
     consumed by apply_prompt_template(). A missing placeholder would
@@ -499,6 +505,7 @@ def test_system_prompt_template_preserves_placeholders():
         "{deferred_tools_section}",
         "{subagent_section}",
         "{acp_section}",
+        "{owner_section}",
         "{subagent_reminder}",
         "{skill_first_reminder}",
     ):

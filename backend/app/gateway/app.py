@@ -26,6 +26,7 @@ from app.gateway.routers import (
     mcp,
     memory,
     models,
+    owner,
     runs,
     scheduled_tasks,
     skills,
@@ -525,6 +526,9 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
 
     # Stateless Runs API (stream/wait without a pre-existing thread)
     app.include_router(runs.router)
+
+    # Owner API (agent registry, task queue, board, approvals)
+    app.include_router(owner.router)
 
     # GitHub webhooks API is mounted at /api/webhooks/github
     # Exempt from auth and CSRF middleware (see auth_middleware._PUBLIC_PATH_PREFIXES
