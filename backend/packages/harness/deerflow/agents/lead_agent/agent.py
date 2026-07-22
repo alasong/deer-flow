@@ -283,6 +283,13 @@ def build_middlewares(
 
     middlewares.append(DynamicContextMiddleware(agent_name=agent_name, app_config=resolved_app_config))
 
+    # Classify the latest user message and inject routing guidance into the
+    # agent's context. The LLM sees a <skill_routing> block with the suggested
+    # skill/channel and may override it with task(skill="...").
+    from deerflow.skills.router import RoutingMiddleware
+
+    middlewares.append(RoutingMiddleware())
+
     # Deterministically load a full SKILL.md when the user starts the turn with
     # /skill-name. This keeps the base system prompt metadata-only while giving
     # explicit user activation priority over model-side relevance guessing.

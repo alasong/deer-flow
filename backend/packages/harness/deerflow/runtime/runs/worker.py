@@ -143,6 +143,7 @@ class RunContext:
     thread_store: Any | None = field(default=None)
     app_config: AppConfig | None = field(default=None)
     on_run_completed: Any | None = field(default=None)
+    scheduler: Any | None = field(default=None)
 
 
 def _install_runtime_context(config: dict, runtime_context: dict[str, Any]) -> None:
@@ -712,6 +713,25 @@ async def run_agent(
                 await ctx.on_run_completed(record)
             except Exception:
                 logger.warning("Run completion hook failed for %s (non-fatal)", run_id, exc_info=True)
+
+        # ── Residency decision: if the thread has an active goal and a
+        # scheduler is configured, schedule a follow-up wakeup so the lead
+        # agent can continue pursuing the goal.  Best-effort: failures are
+        # logged but never propagate.
+        if (
+            record.status == RunStatus.success
+            and ctx.scheduler is not None
+        ):
+            try:
+                await _decide_residency(
+                    checkpointer=checkpointer,
+                    thread_id=thread_id,
+                    scheduler=ctx.scheduler,
+                    app_config=ctx.app_config,
+                )
+            except Exception:
+                logger.debug("Residency decision failed for thread %s (non-fatal)", thread_id, exc_info=True)
+
         if record.finalizing:
             await run_manager.set_finalizing(run_id, False)
 
@@ -1399,6 +1419,87 @@ async def _ensure_interrupted_title(*, checkpointer: Any, thread_id: str, app_co
         return title
 
     return None
+
+
+async def _decide_residency(
+    *,
+    checkpointer: Any,
+    thread_id: str,
+    scheduler: Any,
+    app_config: Any | None = None,
+) -> bool:
+    """Check if the thread should remain resident and schedule a follow-up.
+
+    Reads the current goal state from the thread checkpoint.  If an active
+    goal exists, a follow-up run is scheduled via *scheduler* with a default
+    delay of 30 minutes so the lead agent can continue pursuing it.
+
+    Best-effort: returns ``True`` when a follow-up was scheduled, ``False``
+    otherwise.  Failures are expected to be handled at the call site (logged
+    but not propagated).
+
+    Args:
+        checkpointer: The thread checkpointer (used to read goal state).
+        thread_id: The thread to check.
+        scheduler: An ``EnhancedSchedulerService``-compatible scheduler with
+            a ``dispatch`` method.
+        app_config: Optional app config for scheduler configuration.
+
+    Returns:
+        ``True`` if a follow-up run was scheduled, ``False`` otherwise.
+    """
+    if checkpointer is None or scheduler is None:
+        return False
+
+    from deerflow.agents.goal_state import GoalState
+
+    # Read the current goal state from the thread checkpoint.
+    goal: GoalState | None = None
+    try:
+        from deerflow.runtime.goal import read_thread_goal
+
+        goal = await read_thread_goal(checkpointer, thread_id)
+    except Exception:
+        logger.debug("Could not read goal for residency check on thread %s", thread_id, exc_info=True)
+        return False
+
+    if not goal or goal.get("status") != "active":
+        return False
+
+    # Active goal found — schedule a follow-up run.
+    from deerflow.config.scheduler_config import ScheduledTask
+
+    followup_task = ScheduledTask(
+        id=f"residency-{thread_id}",
+        trigger="manual",
+        thread_id=thread_id,
+        prompt=f"Continue pursuing the active goal: {goal.get('objective', '')}",
+        max_runs_per_day=0,  # unlimited for residency
+        context_filter=None,  # best-effort: no idle check
+    )
+
+    try:
+        result = await scheduler.dispatch(
+            followup_task,
+            get_last_activity=lambda tid: None,
+            get_run_count_today=lambda tid: 0,
+        )
+        if result.get("outcome") == "launched":
+            logger.info(
+                "Residency: scheduled follow-up for thread %s (goal: %.80s)",
+                thread_id,
+                goal.get("objective", ""),
+            )
+            return True
+        logger.debug(
+            "Residency: follow-up not launched for thread %s (outcome: %s)",
+            thread_id,
+            result.get("outcome"),
+        )
+    except Exception:
+        logger.debug("Residency: failed to schedule follow-up for thread %s", thread_id, exc_info=True)
+
+    return False
 
 
 def _lg_mode_to_sse_event(mode: str) -> str:

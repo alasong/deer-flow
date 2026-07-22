@@ -14,10 +14,12 @@ from __future__ import annotations
 
 from .classifier import RoutingContext, SkillClassifier
 from .engine import RouteResult, RouterEngine
+from .middleware import RoutingMiddleware
 
 __all__ = [
     "RoutingContext",
     "SkillClassifier",
     "RouteResult",
     "RouterEngine",
+    "RoutingMiddleware",
 ]
