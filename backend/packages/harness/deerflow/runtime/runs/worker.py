@@ -32,6 +32,7 @@ from typing import Any, Literal, cast
 from langgraph.checkpoint.base import empty_checkpoint
 
 from deerflow.agents.goal_state import GoalEvaluation, GoalState
+from deerflow.agents.thread_state import DecisionLogEntry, GoalHealthEntry
 from deerflow.config.app_config import AppConfig
 from deerflow.runtime.context_keys import CURRENT_RUN_PRE_EXISTING_MESSAGE_IDS_KEY
 from deerflow.runtime.goal import (
@@ -594,6 +595,24 @@ async def run_agent(
             stop_reason = runtime_context.get("stop_reason") if runtime_context is not None else None
             await run_manager.set_status(run_id, RunStatus.success, stop_reason=stop_reason)
 
+        # Best-effort: populate decision_log from the completed run's messages.
+        if checkpointer is not None and record.status != RunStatus.interrupted:
+            try:
+                messages = _read_checkpoint_messages(
+                    await checkpointer.aget_tuple(
+                        {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}},
+                    )
+                )
+                if messages:
+                    await _populate_decision_log(
+                        checkpointer=checkpointer,
+                        thread_id=thread_id,
+                        run_id=run_id,
+                        messages=messages,
+                    )
+            except Exception:
+                logger.debug("Failed to populate decision_log after run %s", run_id, exc_info=True)
+
     except asyncio.CancelledError:
         await run_manager.set_finalizing(run_id, True)
         action = record.abort_action
@@ -728,6 +747,7 @@ async def run_agent(
                     thread_id=thread_id,
                     scheduler=ctx.scheduler,
                     app_config=ctx.app_config,
+                    journal=journal,
                 )
             except Exception:
                 logger.debug("Residency decision failed for thread %s (non-fatal)", thread_id, exc_info=True)
@@ -862,8 +882,20 @@ async def _persist_goal_evaluation(
                 as_node="goal_evaluator",
                 expected_checkpoint_id=expected_checkpoint_id,
             )
-        await bridge.publish(run_id, "values", serialize(values, mode="values"))
-        return updated_goal
+            await bridge.publish(run_id, "values", serialize(values, mode="values"))
+            # Append goal health entry after successful evaluation persist
+            tick = int(updated_goal.get("continuation_count", 0))
+            goal_health_entry = GoalHealthEntry(
+                run_id=run_id,
+                tick=tick,
+                progress=_compute_goal_progress(updated_goal, evaluation),
+                decision_count=0,
+                token_used=0,
+                stand_down_reason=stand_down_reason,
+            )
+            # Best-effort append (synchronous write within the evaluation flow)
+            await _append_goal_health(checkpointer=checkpointer, thread_id=thread_id, entry=goal_health_entry)
+            return updated_goal
     except GoalWriteConflict:
         return None
     except Exception:
@@ -1421,18 +1453,82 @@ async def _ensure_interrupted_title(*, checkpointer: Any, thread_id: str, app_co
     return None
 
 
+# Residency backoff constants
+_RESIDENCY_BACKOFF_SECONDS = [1800, 3600, 7200, 14400, 28800]  # 30m, 1h, 2h, 4h, 8h
+_RESIDENCY_MAX_ATTEMPTS = 5
+
+
+async def _read_residency_attempts(checkpointer: Any, thread_id: str) -> int:
+    """Read residency attempt count from checkpoint metadata.
+
+    Returns 0 when the checkpointer is None, no checkpoint exists, the
+    metadata key is absent, or any error occurs.
+    """
+    if checkpointer is None:
+        return 0
+    ckpt_config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
+    try:
+        ckpt_tuple = await checkpointer.aget_tuple(ckpt_config)
+        if ckpt_tuple is None:
+            return 0
+        metadata = getattr(ckpt_tuple, "metadata", {}) or {}
+        return int(metadata.get("residency_attempts", 0))
+    except Exception:
+        return 0
+
+
+async def _write_residency_attempts(checkpointer: Any, thread_id: str, attempts: int) -> None:
+    """Write residency attempt count into checkpoint metadata.
+
+    Best-effort: errors are silently ignored.
+    """
+    if checkpointer is None:
+        return
+    ckpt_config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
+    try:
+        ckpt_tuple = await checkpointer.aget_tuple(ckpt_config)
+        if ckpt_tuple is None:
+            return
+        checkpoint = dict(getattr(ckpt_tuple, "checkpoint", {}) or {})
+        metadata = dict(getattr(ckpt_tuple, "metadata", {}) or {})
+        metadata["residency_attempts"] = attempts
+        metadata["source"] = "update"
+        prev_step = metadata.get("step")
+        metadata["step"] = (prev_step + 1) if isinstance(prev_step, int) else 1
+        metadata["writes"] = {"runtime_residency_attempts": {"attempts": attempts}}
+
+        marker = empty_checkpoint()
+        checkpoint["id"] = marker["id"]
+        checkpoint["ts"] = marker["ts"]
+
+        write_config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
+        await checkpointer.aput(write_config, checkpoint, metadata, {})
+    except Exception:
+        pass
+
+
+async def _reset_residency_attempts(checkpointer: Any, thread_id: str) -> None:
+    """Reset residency attempt count to 0."""
+    await _write_residency_attempts(checkpointer, thread_id, 0)
+
+
 async def _decide_residency(
     *,
     checkpointer: Any,
     thread_id: str,
     scheduler: Any,
     app_config: Any | None = None,
+    journal: Any | None = None,
 ) -> bool:
     """Check if the thread should remain resident and schedule a follow-up.
 
     Reads the current goal state from the thread checkpoint.  If an active
-    goal exists, a follow-up run is scheduled via *scheduler* with a default
-    delay of 30 minutes so the lead agent can continue pursuing it.
+    goal exists, a follow-up run is scheduled via *scheduler* with an
+    exponential backoff delay (30m, 1h, 2h, 4h, 8h) based on the number
+    of prior failed attempts recorded in checkpoint metadata.
+
+    On success the attempt counter is reset; on failure it is incremented
+    so subsequent retries back off more aggressively.
 
     Best-effort: returns ``True`` when a follow-up was scheduled, ``False``
     otherwise.  Failures are expected to be handled at the call site (logged
@@ -1444,6 +1540,7 @@ async def _decide_residency(
         scheduler: An ``EnhancedSchedulerService``-compatible scheduler with
             a ``dispatch`` method.
         app_config: Optional app config for scheduler configuration.
+        journal: Optional ``RunJournal`` for publishing observability events.
 
     Returns:
         ``True`` if a follow-up run was scheduled, ``False`` otherwise.
@@ -1464,9 +1561,32 @@ async def _decide_residency(
         return False
 
     if not goal or goal.get("status") != "active":
+        # No active goal: reset backoff so a future goal starts fresh.
+        await _reset_residency_attempts(checkpointer, thread_id)
         return False
 
-    # Active goal found — schedule a follow-up run.
+    # Read backoff state and compute delay.
+    attempts = await _read_residency_attempts(checkpointer, thread_id)
+    delay = _RESIDENCY_BACKOFF_SECONDS[min(attempts, len(_RESIDENCY_BACKOFF_SECONDS) - 1)]
+
+    # Goal-health throttle: read recent health entries and adjust delay upward
+    # when progress has been low across consecutive evaluations (M4.2).
+    try:
+        ckpt_tuple = await checkpointer.aget_tuple(
+            {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
+        )
+        if ckpt_tuple is not None:
+            channel_values = (getattr(ckpt_tuple, "checkpoint", {}) or {}).get("channel_values", {}) or {}
+            health_entries = channel_values.get("goal_health") or []
+            throttle_seconds = _compute_goal_throttle_delay(health_entries)
+            if throttle_seconds > 0:
+                delay = max(delay, throttle_seconds)
+                if journal is not None:
+                    journal.add_event("residency.throttled", {"base_delay": delay, "throttle": throttle_seconds})
+    except Exception:
+        pass
+
+    # Active goal found — schedule a follow-up run with computed delay.
     from deerflow.config.scheduler_config import ScheduledTask
 
     followup_task = ScheduledTask(
@@ -1476,6 +1596,7 @@ async def _decide_residency(
         prompt=f"Continue pursuing the active goal: {goal.get('objective', '')}",
         max_runs_per_day=0,  # unlimited for residency
         context_filter=None,  # best-effort: no idle check
+        delay_seconds=delay,
     )
 
     try:
@@ -1485,18 +1606,30 @@ async def _decide_residency(
             get_run_count_today=lambda tid: 0,
         )
         if result.get("outcome") == "launched":
+            await _reset_residency_attempts(checkpointer, thread_id)
+            if journal is not None:
+                journal.add_event("residency.decision", {"decision": "scheduled", "reason": "active_goal"})
+                journal.add_event("residency.scheduled", {"delay": delay, "thread_id": thread_id})
             logger.info(
-                "Residency: scheduled follow-up for thread %s (goal: %.80s)",
+                "Residency: scheduled follow-up for thread %s (goal: %.80s, delay: %ds)",
                 thread_id,
                 goal.get("objective", ""),
+                delay,
             )
             return True
+        # Not launched — increment backoff.
+        await _write_residency_attempts(checkpointer, thread_id, attempts + 1)
+        if journal is not None:
+            journal.add_event("residency.decision", {"decision": "skipped", "reason": result.get("outcome", "unknown")})
         logger.debug(
             "Residency: follow-up not launched for thread %s (outcome: %s)",
             thread_id,
             result.get("outcome"),
         )
-    except Exception:
+    except Exception as e:
+        await _write_residency_attempts(checkpointer, thread_id, attempts + 1)
+        if journal is not None:
+            journal.add_event("residency.failed", {"error": str(e)})
         logger.debug("Residency: failed to schedule follow-up for thread %s", thread_id, exc_info=True)
 
     return False
@@ -1674,3 +1807,223 @@ def _unpack_stream_item(
 
     # Fallback: single-element output from first mode
     return lg_modes[0] if lg_modes else None, item
+
+
+# ── Decision log helpers (M4) ──────────────────────────────────────────────
+
+_SIGNIFICANT_TOOL_PREFIXES = ("update_agent", "task", "skill_manage", "memory_add", "memory_update", "memory_delete")
+
+
+def _extract_decision_entries(messages: list[Any], run_id: str) -> list[DecisionLogEntry]:
+    """Extract decision-log entries from the most recent run's AI tool calls.
+
+    Scans the end of *messages* for AI messages with tool_calls that belong
+    to this *run_id* and converts significant calls to ``DecisionLogEntry``.
+    """
+    from deerflow.utils.time import now_iso
+
+    entries: list[DecisionLogEntry] = []
+    timestamp = now_iso()
+    seen: set[str] = set()
+
+    for msg in reversed(messages):
+        tool_calls = getattr(msg, "tool_calls", None) or []
+        for tc in tool_calls:
+            name = tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", "")
+            if not name:
+                continue
+            # Dedup by tool call id so we don't log the same call twice
+            tc_id = tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", "")
+            if tc_id and tc_id in seen:
+                continue
+            if tc_id:
+                seen.add(tc_id)
+
+            args = tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {})
+            severity = "info"
+
+            # Classify significance
+            is_significant = name.startswith(_SIGNIFICANT_TOOL_PREFIXES)
+            if not is_significant:
+                continue
+
+            # Build a compact human-readable summary
+            summary = _summarize_tool_call(name, args)
+            entries.append(
+                DecisionLogEntry(
+                    timestamp=timestamp,
+                    decision_type=f"tool:{name}",
+                    summary=summary,
+                    severity=severity,
+                )
+            )
+            if len(entries) >= 20:
+                break
+        if entries and len(entries) >= 20:
+            break
+
+    return entries
+
+
+def _summarize_tool_call(name: str, args: dict) -> str:
+    """Produce a one-line summary for a tool call."""
+    if name == "task":
+        desc = (args.get("description") or args.get("prompt") or "")[:120]
+        return f"Delegated subagent: {desc}"
+    if name == "update_agent":
+        return "Updated agent configuration"
+    if name == "skill_manage":
+        action = args.get("action", "unknown")
+        skill = args.get("name", "unknown")
+        return f"Skill {action}: {skill}"
+    if name == "memory_add":
+        return "Added memory fact"
+    if name == "memory_update":
+        return "Updated memory fact"
+    if name == "memory_delete":
+        return "Deleted memory fact"
+    return f"Called {name}"
+
+
+async def _populate_decision_log(
+    *,
+    checkpointer: Any,
+    thread_id: str,
+    run_id: str,
+    messages: list[Any],
+) -> None:
+    """Extract decisions from *messages* and append them to the thread's decision_log channel.
+
+    Best-effort: errors are silently logged but never propagated.
+
+    NOTE: This function directly manipulates LangGraph checkpoint internals
+    (channel_versions, metadata step bumping). Any langgraph major version
+    upgrade may break this logic.
+    """
+    if checkpointer is None:
+        return
+    entries = _extract_decision_entries(messages, run_id)
+    if not entries:
+        return
+
+    try:
+        from deerflow.agents.thread_state import merge_decision_log
+
+        ckpt_config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
+        ckpt_tuple = await checkpointer.aget_tuple(ckpt_config)
+        if ckpt_tuple is None:
+            return
+
+        checkpoint = dict(getattr(ckpt_tuple, "checkpoint", {}) or {})
+        channel_values = dict(checkpoint.get("channel_values", {}) or {})
+        existing = channel_values.get("decision_log") or []
+        merged = merge_decision_log(existing, entries)
+
+        channel_values["decision_log"] = merged
+        checkpoint["channel_values"] = channel_values
+
+        channel_versions = dict(checkpoint.get("channel_versions", {}) or {})
+        next_version = _bump_channel_version(checkpointer, channel_versions.get("decision_log"))
+        channel_versions["decision_log"] = next_version
+        checkpoint["channel_versions"] = channel_versions
+
+        metadata = dict(getattr(ckpt_tuple, "metadata", {}) or {})
+        metadata["source"] = "update"
+        prev_step = metadata.get("step")
+        metadata["step"] = (prev_step + 1) if isinstance(prev_step, int) else 1
+        metadata["writes"] = {"runtime_decision_log": {"entries": len(entries)}}
+
+        write_config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
+        await checkpointer.aput(write_config, checkpoint, metadata, {"decision_log": next_version})
+    except Exception:
+        logger.debug("Failed to populate decision_log for thread %s run %s", thread_id, run_id, exc_info=True)
+
+
+# ── Goal health helpers (M4) ────────────────────────────────────────────────
+
+
+async def _append_goal_health(
+    *,
+    checkpointer: Any,
+    thread_id: str,
+    entry: GoalHealthEntry,
+) -> None:
+    """Append one health entry to the thread's goal_health channel.
+
+    Best-effort: errors are silently logged but never propagated.
+
+    NOTE: This function directly manipulates LangGraph checkpoint internals
+    (channel_versions, metadata step bumping). Any langgraph major version
+    upgrade may break this logic.
+    """
+    if checkpointer is None:
+        return
+    try:
+        from deerflow.agents.thread_state import merge_goal_health
+
+        ckpt_config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
+        ckpt_tuple = await checkpointer.aget_tuple(ckpt_config)
+        if ckpt_tuple is None:
+            return
+
+        checkpoint = dict(getattr(ckpt_tuple, "checkpoint", {}) or {})
+        channel_values = dict(checkpoint.get("channel_values", {}) or {})
+        existing = channel_values.get("goal_health") or []
+        merged = merge_goal_health(existing, [entry])
+
+        channel_values["goal_health"] = merged
+        checkpoint["channel_values"] = channel_values
+
+        channel_versions = dict(checkpoint.get("channel_versions", {}) or {})
+        next_version = _bump_channel_version(checkpointer, channel_versions.get("goal_health"))
+        channel_versions["goal_health"] = next_version
+        checkpoint["channel_versions"] = channel_versions
+
+        metadata = dict(getattr(ckpt_tuple, "metadata", {}) or {})
+        metadata["source"] = "update"
+        prev_step = metadata.get("step")
+        metadata["step"] = (prev_step + 1) if isinstance(prev_step, int) else 1
+        metadata["writes"] = {"runtime_goal_health": {"entry": entry}}
+
+        write_config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
+        await checkpointer.aput(write_config, checkpoint, metadata, {"goal_health": next_version})
+    except Exception:
+        logger.debug("Failed to append goal_health for thread %s", thread_id, exc_info=True)
+
+
+def _compute_goal_progress(goal: GoalState, evaluation: GoalEvaluation) -> float:
+    """Return a heuristic progress score (0.0-1.0) based on evaluation state.
+
+    - satisfied -> 1.0
+    - blocker is goal_not_met_yet -> 0.5 (still working)
+    - other blockers -> 0.1 (stuck)
+    - no evaluation yet -> 0.0
+    """
+    if evaluation["satisfied"]:
+        return 1.0
+    if evaluation["blocker"] == "goal_not_met_yet":
+        return 0.5
+    return 0.1
+
+
+def _compute_goal_throttle_delay(
+    goal_health: list[GoalHealthEntry],
+    *,
+    base_delays: list[int] | None = None,
+) -> int:
+    """Adjust the residency backoff delay based on recent goal health.
+
+    When the last 3 health entries show low progress (< 0.3 on average),
+    multiply the delay by a throttle factor (1.5x, 3x, 6x for 1, 2, 3+
+    consecutive low-progress entries). Returns the adjusted delay in seconds.
+    """
+    if not goal_health:
+        return 0  # no adjustment (caller uses default backoff)
+    recent = goal_health[-3:]
+    low_progress_count = sum(1 for e in recent if e.get("progress", 0.5) < 0.3)
+    if low_progress_count == 0:
+        return 0
+    # Progressive multiplier
+    factors = {1: 1.5, 2: 3.0, 3: 6.0}
+    factor = factors.get(low_progress_count, 6.0)
+    return int(1800 * factor)

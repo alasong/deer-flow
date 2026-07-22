@@ -128,6 +128,79 @@ def merge_promoted(existing: PromotedTools | None, new: PromotedTools | None) ->
     }
 
 
+class DecisionLogEntry(TypedDict):
+    """A single decision recorded for asynchronous human review.
+
+    Automatically extracted from tool calls after each run, so the human
+    reviewer can see what decisions the AI made without combing through
+    the full message history.
+    """
+
+    timestamp: str
+    decision_type: str
+    summary: str
+    severity: str  # "info", "warning", "critical"
+    metadata: NotRequired[dict | None]
+
+
+_DECISION_LOG_MAX_ENTRIES = 200
+
+
+def merge_decision_log(
+    existing: list[DecisionLogEntry] | None,
+    new: list[DecisionLogEntry] | None,
+) -> list[DecisionLogEntry]:
+    """Append-only merge for the decision log, capped at ``_DECISION_LOG_MAX_ENTRIES``.
+
+    ``new`` is always appended (never replaces existing). Use this
+    semantics over ``last-write-wins`` because multiple middleware/graph
+    steps may each contribute entries and no single step sees the full
+    list.
+    """
+    if not new:
+        return existing or []
+    if not existing:
+        return new[-_DECISION_LOG_MAX_ENTRIES:]
+    merged = existing + new
+    if len(merged) > _DECISION_LOG_MAX_ENTRIES:
+        merged = merged[-_DECISION_LOG_MAX_ENTRIES:]
+    return merged
+
+
+class GoalHealthEntry(TypedDict):
+    """Health score for a single goal-evaluation cycle.
+
+    Populated by the goal evaluator / continuation loop in worker.py
+    after each evaluation pass so external systems and future scheduling
+    decisions can assess how well a long-running goal is progressing.
+    """
+
+    run_id: str
+    tick: int
+    progress: float  # 0.0-1.0 — heuristic based on visible evidence
+    decision_count: int  # tool calls in this run
+    token_used: int
+    stand_down_reason: NotRequired[str | None]
+
+
+_GOAL_HEALTH_MAX_ENTRIES = 100
+
+
+def merge_goal_health(
+    existing: list[GoalHealthEntry] | None,
+    new: list[GoalHealthEntry] | None,
+) -> list[GoalHealthEntry]:
+    """Append-only merge for goal health entries."""
+    if not new:
+        return existing or []
+    if not existing:
+        return new[-_GOAL_HEALTH_MAX_ENTRIES:]
+    merged = existing + new
+    if len(merged) > _GOAL_HEALTH_MAX_ENTRIES:
+        merged = merged[-_GOAL_HEALTH_MAX_ENTRIES:]
+    return merged
+
+
 TERMINAL_STATUSES: frozenset[str] = frozenset(SUBAGENT_STATUS_VALUES)
 _DELEGATION_LEDGER_MAX_ENTRIES = 50
 
@@ -248,6 +321,9 @@ class ThreadState(AgentState):
     promoted: Annotated[PromotedTools | None, merge_promoted]
     delegations: Annotated[list[DelegationEntry], merge_delegations]
     skill_context: Annotated[list[SkillEntry], merge_skill_context]
+    decision_log: Annotated[list[DecisionLogEntry], merge_decision_log]
+    goal_health: Annotated[list[GoalHealthEntry], merge_goal_health]
     summary_text: NotRequired[str | None]
     offload_summary: NotRequired[str | None]
     offload_path: NotRequired[str | None]
+    offload_key_decisions: NotRequired[list[dict] | None]

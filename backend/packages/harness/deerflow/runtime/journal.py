@@ -550,6 +550,23 @@ class RunJournal(BaseCallbackHandler):
         except (TypeError, ValueError):
             return 0
 
+    def add_event(self, event_type: str, data: dict) -> None:
+        """Record a generic runtime event for observability.
+
+        Intended for runtime-level events (e.g. residency decisions,
+        backoff scheduling) that are not tied to a specific middleware
+        or LLM callback.
+
+        Args:
+            event_type: Dot-separated event type (e.g. ``"residency.decision"``).
+            data: Event payload as a dictionary.
+        """
+        self._put(
+            event_type=event_type,
+            category="runtime",
+            content=data,
+        )
+
     # -- Public methods (called by worker) --
 
     def record_external_llm_usage_records(

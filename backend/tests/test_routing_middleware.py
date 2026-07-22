@@ -136,3 +136,57 @@ class TestRoutingMiddleware:
         mw = RoutingMiddleware()
         result = mw.before_agent(state, runtime)
         assert result is None
+
+    def test_routing_mode_defaults_to_advisory(self):
+        """routing_mode parameter defaults to advisory when not specified."""
+        mw = RoutingMiddleware()
+        assert mw.routing_mode == "advisory"
+
+    def test_auto_activate_injects_skill_context(self):
+        """auto_activate mode with skill route injects skill_context in state update."""
+        state = _make_state([HumanMessage(content="分析一下 AI 芯片的市场格局")])
+        runtime = _make_runtime()
+        mw = RoutingMiddleware(routing_mode="auto_activate")
+        result = mw.before_agent(state, runtime)
+        assert result is not None
+        assert "skill_context" in result
+        assert len(result["skill_context"]) == 1
+        sc = result["skill_context"][0]
+        assert sc["name"] == "pdf"
+        assert "path" in sc
+        assert "Auto-activated" in sc["description"]
+        assert isinstance(sc["loaded_at"], int)
+        # Should still have messages (guidance)
+        assert "messages" in result
+        assert len(result["messages"]) == 1
+
+    def test_auto_activate_action_route_no_skill_context(self):
+        """auto_activate mode with action route doesn't inject skill_context."""
+        state = _make_state([HumanMessage(content="今天天气怎么样")])
+        runtime = _make_runtime()
+        mw = RoutingMiddleware(routing_mode="auto_activate")
+        result = mw.before_agent(state, runtime)
+        assert result is not None
+        assert "messages" in result
+        assert "skill_context" not in result
+
+    def test_enforce_mode_accepted(self):
+        """enforce mode is accepted without error (stub level)."""
+        state = _make_state([HumanMessage(content="分析一下 AI 芯片趋势")])
+        runtime = _make_runtime()
+        mw = RoutingMiddleware(routing_mode="enforce")
+        result = mw.before_agent(state, runtime)
+        assert result is not None
+        assert "messages" in result
+
+    def test_route_level_mode_override(self):
+        """Route-level mode field overrides middleware default."""
+        # Middleware defaults to advisory, but tech/analysis route has mode: auto_activate
+        state = _make_state([HumanMessage(content="分析一下 AI 芯片的市场格局")])
+        runtime = _make_runtime()
+        mw = RoutingMiddleware()  # default advisory
+        result = mw.before_agent(state, runtime)
+        assert result is not None
+        # Route has mode: auto_activate, so skill_context is injected despite advisory default
+        assert "skill_context" in result
+        assert result["skill_context"][0]["name"] == "pdf"

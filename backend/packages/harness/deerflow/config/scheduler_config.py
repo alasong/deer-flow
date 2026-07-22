@@ -51,6 +51,12 @@ class ScheduledTask(BaseModel):
         description="Optional context filter that gates dispatch based on "
         "thread state (e.g. last activity time).",
     )
+    delay_seconds: int = Field(
+        default=0,
+        ge=0,
+        description="Delay in seconds before the task should execute. "
+        "0 means immediate/default scheduling.",
+    )
 
 
 class SchedulerConfig(BaseModel):

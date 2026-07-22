@@ -118,6 +118,9 @@ class ContextOffloadMiddleware(AgentMiddleware):
         summary = self._build_offload_summary(dump, path)
         trimmed = self._trim_messages(messages)
 
+        decisions = self._extract_key_decisions(messages)[:5]
+        self._sync_decisions_to_memory(decisions, runtime)
+
         logger.info(
             "Context offloaded to %s (%d messages, ~%d tokens, %d kept)",
             path,
@@ -130,6 +133,7 @@ class ContextOffloadMiddleware(AgentMiddleware):
             "messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *trimmed],
             "offload_summary": summary,
             "offload_path": path,
+            "offload_key_decisions": decisions,
         }
 
     # ------------------------------------------------------------------
@@ -176,6 +180,61 @@ class ContextOffloadMiddleware(AgentMiddleware):
         if len(messages) <= self.messages_to_keep:
             return list(messages)
         return messages[-self.messages_to_keep :]
+
+    def _extract_key_decisions(self, messages: list[AnyMessage]) -> list[dict]:
+        """Extract tool_call decisions from recent AI messages for offload awareness.
+
+        Scans the last 50 messages in reverse and extracts a lightweight entry
+        for every ``AIMessage`` that carries ``tool_calls``. The results are
+        pure rule-based (no LLM call) so decisions about tool usage are
+        recoverable after an offload.
+
+        Returns:
+            A list of dicts, each with ``type``, ``summary``, and ``source_msg_id``.
+        """
+        decisions: list[dict] = []
+        recent = messages[-50:] if len(messages) > 50 else messages
+        for msg in reversed(recent):
+            if msg.type != "ai":
+                continue
+            tool_calls = getattr(msg, "tool_calls", None) or []
+            if not tool_calls:
+                continue
+            for tc in tool_calls:
+                name = tc.get("name", "unknown")
+                args = tc.get("args", {})
+                # Build a brief parameter preview (first 3 keys, values truncated)
+                param_parts: list[str] = []
+                for k, v in list(args.items())[:3]:
+                    if isinstance(v, str) and len(v) > 80:
+                        v = v[:80] + "..."
+                    param_parts.append(f"{k}={v!r}")
+                if len(args) > 3:
+                    param_parts.append("...")
+                args_preview = ", ".join(param_parts)
+                decisions.append({
+                    "type": "tool_call",
+                    "summary": f"{name}({args_preview})",
+                    "source_msg_id": getattr(msg, "id", None),
+                })
+        return decisions
+
+    def _sync_decisions_to_memory(self, decisions: list[dict], runtime: Runtime) -> None:
+        """Best-effort sync of offload decisions to memory.
+
+        If *runtime* carries a ``memory_manager`` attribute, up to 5 decisions
+        are saved with the ``[offload-decision]`` prefix so the LLM can
+        recover key context after an offload. Failures are logged but not
+        propagated.
+        """
+        mm = getattr(runtime, "memory_manager", None)
+        if mm is None:
+            return
+        for d in decisions[:5]:
+            try:
+                mm.add_memory(content=f"[offload-decision] {d['summary']}")
+            except Exception:
+                logger.exception("Failed to sync offload decision to memory")
 
     @staticmethod
     def _resolve_thread_id(runtime: Runtime) -> str:

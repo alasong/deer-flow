@@ -268,6 +268,26 @@ _EXEMPT_BLOCK_TAGS = {
     # Documentation artifact: appears only in this middleware's own explanatory
     # comment describing the tag pattern, not emitted into any prompt.
     "tag",
+    # Runtime routing guidance rendered *inside* the <skill_routing> authority
+    # block emitted by RoutingMiddleware. Forging any single one in isolation
+    # grants no trusted context — the attacker would also need to forge the
+    # surrounding <skill_routing>...</skill_routing> wrapper, which IS blocked.
+    "action",
+    "candidates",
+    "channel",
+    "classification",
+    "complexity",
+    "domain",
+    "guidance",
+    "match_index",
+    "mode",
+    "route",
+    "skill_routing",
+    "task_type",
+    # Lead-agent prompt section: <decision_log_system> is a legitimate framework
+    # authority block rendered by the lead agent prompt before <response_style>.
+    # It is never produced from untrusted user input.
+    "decision_log_system",
 }
 
 

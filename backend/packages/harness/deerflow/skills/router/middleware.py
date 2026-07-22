@@ -13,7 +13,8 @@ workflow instead.
 from __future__ import annotations
 
 import logging
-from typing import override
+import time
+from typing import Literal, override
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import SystemMessage
@@ -30,6 +31,7 @@ routes:
   - match: { domain: "tech", complexity: "high", task_type: "analysis" }
     skill: "pdf"
     channel: "analysis"
+    mode: auto_activate
   - match: { domain: "tech", complexity: "high", task_type: "research" }
     skill: "deep-research"
   - match: { domain: "tech", complexity: "high", task_type: "implementation" }
@@ -75,10 +77,12 @@ class RoutingMiddleware(AgentMiddleware):
         *,
         classifier: SkillClassifier | None = None,
         engine: RouterEngine | None = None,
+        routing_mode: Literal["advisory", "auto_activate", "enforce"] = "advisory",
     ) -> None:
         super().__init__()
         self._classifier = classifier or SkillClassifier()
         self._engine = engine or self._build_default_engine()
+        self.routing_mode = routing_mode
 
     @staticmethod
     def _build_default_engine() -> RouterEngine:
@@ -95,7 +99,7 @@ class RoutingMiddleware(AgentMiddleware):
                     return content.strip()
         return None
 
-    def _build_guidance(self, ctx, result) -> str:
+    def _build_guidance(self, ctx, result, effective_mode=None) -> str:
         parts = ["<skill_routing>"]
         parts.append("  <classification>")
         parts.append(f"    <domain>{ctx.domain}</domain>")
@@ -108,13 +112,24 @@ class RoutingMiddleware(AgentMiddleware):
             parts.append(f"    <skill>{result.skill}</skill>")
             parts.append(f"    <channel>{result.channel or 'standard'}</channel>")
             parts.append(f"    <match_index>{result.match_index}</match_index>")
+            if result.mode:
+                parts.append(f"    <mode>{result.mode}</mode>")
             parts.append("  </route>")
-            parts.append(
-                "  <guidance>Your input was classified for skill "
-                f"'{result.skill}' (channel: {result.channel or 'standard'}). "
-                "Use this skill's workflow if applicable, or call "
-                'task(skill="...") to override.</guidance>'
-            )
+            if effective_mode in ("auto_activate", "enforce"):
+                mode_labels = {"auto_activate": "automatically activated", "enforce": "enforced"}
+                label = mode_labels.get(effective_mode, "activated")
+                parts.append(
+                    f"  <guidance>Your input was classified for skill "
+                    f"'{result.skill}' (channel: {result.channel or 'standard'}). "
+                    f"This route is {label}. Use this skill's workflow.</guidance>"
+                )
+            else:
+                parts.append(
+                    "  <guidance>Your input was classified for skill "
+                    f"'{result.skill}' (channel: {result.channel or 'standard'}). "
+                    "Use this skill's workflow if applicable, or call "
+                    'task(skill="...") to override.</guidance>'
+                )
         elif result.action:
             parts.append("  <route>")
             parts.append(f"    <action>{result.action}</action>")
@@ -152,17 +167,22 @@ class RoutingMiddleware(AgentMiddleware):
 
         ctx = self._classifier.classify(user_text)
         result = self._engine.route(ctx)
-        guidance = self._build_guidance(ctx, result)
+
+        # Effective mode: route-level override takes priority over middleware default
+        effective_mode = result.mode or self.routing_mode
+
+        guidance = self._build_guidance(ctx, result, effective_mode=effective_mode)
 
         logger.debug(
-            "RoutingMiddleware: domain=%s complexity=%s task_type=%s skill=%s",
+            "RoutingMiddleware: domain=%s complexity=%s task_type=%s skill=%s mode=%s",
             ctx.domain,
             ctx.complexity,
             ctx.task_type,
             result.skill,
+            effective_mode,
         )
 
-        return {
+        update: dict = {
             "messages": [
                 SystemMessage(
                     content=guidance,
@@ -170,6 +190,22 @@ class RoutingMiddleware(AgentMiddleware):
                 )
             ],
         }
+
+        # auto_activate: inject skill_context when a skill is matched
+        if effective_mode == "auto_activate" and result.skill:
+            update["skill_context"] = [
+                {
+                    "name": result.skill,
+                    "path": f"/mnt/skills/public/{result.skill}",
+                    "description": (
+                        f"Auto-activated by routing ({result.skill}/"
+                        f"{result.channel or 'standard'})"
+                    ),
+                    "loaded_at": int(time.time()),
+                }
+            ]
+
+        return update
 
     @override
     async def abefore_agent(self, state, runtime: Runtime) -> dict | None:

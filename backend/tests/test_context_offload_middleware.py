@@ -127,3 +127,121 @@ class TestContextOffloadMiddleware:
         assert mw.threshold == 99_000
         assert mw.messages_to_keep == 25
         assert mw.offload_dir == "/tmp/offloads"
+
+
+class TestOffloadKeyDecisions:
+    """Tests for _extract_key_decisions and _sync_decisions_to_memory."""
+
+    def test_extract_from_tool_calls(self):
+        """_extract_key_decisions captures tool_call decisions from AI messages."""
+        messages = [
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "bash", "args": {"command": "npm run build"}, "id": "tc1"}],
+                id="msg-1",
+            ),
+            AIMessage(content="Ready for deploy"),
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "bash", "args": {"command": "npm run deploy"}, "id": "tc2"}],
+                id="msg-2",
+            ),
+        ]
+        mw = ContextOffloadMiddleware(offload_threshold=999_999)
+        decisions = mw._extract_key_decisions(messages)
+
+        # Most recent tool_call first (reversed order)
+        assert len(decisions) == 2
+        assert "bash" in decisions[0]["summary"]
+        assert "npm run deploy" in decisions[0]["summary"]
+        assert decisions[0]["source_msg_id"] == "msg-2"
+        assert decisions[1]["source_msg_id"] == "msg-1"
+        assert "npm run build" in decisions[1]["summary"]
+
+    def test_format_has_required_fields(self):
+        """Each decision dict has type, summary, source_msg_id."""
+        messages = [
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "bash", "args": {"command": "ls"}, "id": "tc1"}],
+                id="msg-1",
+            ),
+        ]
+        mw = ContextOffloadMiddleware(offload_threshold=999_999)
+        decisions = mw._extract_key_decisions(messages)
+        assert len(decisions) >= 1
+        d = decisions[0]
+        assert "type" in d
+        assert "summary" in d
+        assert "source_msg_id" in d
+        assert d["type"] == "tool_call"
+        assert isinstance(d["summary"], str)
+        assert len(d["summary"]) > 0
+        assert d["source_msg_id"] == "msg-1"
+
+    def test_empty_messages_returns_empty_list(self):
+        """Empty message list returns empty list."""
+        mw = ContextOffloadMiddleware(offload_threshold=999_999)
+        assert mw._extract_key_decisions([]) == []
+
+    def test_skips_ai_messages_without_tool_calls(self):
+        """AI messages without tool_calls are skipped."""
+        messages = [
+            AIMessage(content="I am thinking...", id="msg-1"),
+            AIMessage(content="Here is the result", id="msg-2"),
+        ]
+        mw = ContextOffloadMiddleware(offload_threshold=999_999)
+        decisions = mw._extract_key_decisions(messages)
+        assert decisions == []
+
+    def test_sync_decisions_no_memory_manager_does_not_raise(self):
+        """_sync_decisions_to_memory does not crash when runtime has no memory_manager."""
+        mw = ContextOffloadMiddleware(offload_threshold=999_999)
+        runtime = _make_runtime()
+        decisions = [{"type": "tool_call", "summary": "bash(ls)", "source_msg_id": "x"}]
+        mw._sync_decisions_to_memory(decisions, runtime)
+
+    def test_offload_includes_key_decisions_field(self, monkeypatch):
+        """_maybe_offload returns dict with offload_key_decisions when triggered."""
+        messages = [
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "bash", "args": {"command": "deploy"}, "id": "tc1"}],
+                id="msg-1",
+            ),
+        ]
+        state = _make_state(messages)
+        runtime = _make_runtime()
+
+        mw = ContextOffloadMiddleware(offload_threshold=100)
+        monkeypatch.setattr(mw, "_count_tokens", lambda msgs: 999_999)
+        monkeypatch.setattr(mw, "_write_offload", lambda dump, tid: "/tmp/off.json")
+        monkeypatch.setattr(mw, "_sync_decisions_to_memory", lambda d, rt: None)
+
+        result = mw.before_model(state, runtime)
+        assert result is not None
+        assert "offload_key_decisions" in result
+        assert len(result["offload_key_decisions"]) >= 1
+
+    def test_offload_key_decisions_max_five(self, monkeypatch):
+        """offload_key_decisions contains at most 5 entries."""
+        messages = [
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "bash", "args": {"command": f"cmd_{i}"}, "id": f"tc_{i}"}],
+                id=f"msg-{i}",
+            )
+            for i in range(10)
+        ]
+        state = _make_state(messages)
+        runtime = _make_runtime()
+
+        mw = ContextOffloadMiddleware(offload_threshold=100)
+        monkeypatch.setattr(mw, "_count_tokens", lambda msgs: 999_999)
+        monkeypatch.setattr(mw, "_write_offload", lambda dump, tid: "/tmp/off.json")
+        monkeypatch.setattr(mw, "_sync_decisions_to_memory", lambda d, rt: None)
+
+        result = mw.before_model(state, runtime)
+        assert result is not None
+        assert "offload_key_decisions" in result
+        assert len(result["offload_key_decisions"]) <= 5

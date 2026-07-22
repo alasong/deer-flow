@@ -25,6 +25,7 @@ class RouteResult:
         skill: Matched skill name, or None if no direct match.
         channel: Matched channel name, or None.
         action: Direct action (e.g. "direct") for routes without a skill, or None.
+        mode: Route-level mode override (e.g. "auto_activate"), or None.
         candidates: Fallback candidate entries when no exact match is found.
         match_index: Index of the matching route, or -1 if no match.
     """
@@ -32,6 +33,7 @@ class RouteResult:
     skill: Optional[str] = None
     channel: Optional[str] = None
     action: Optional[str] = None
+    mode: Optional[str] = None
     candidates: list[dict[str, Any]] = field(default_factory=list)
     match_index: int = -1
 
@@ -168,6 +170,7 @@ class RouterEngine:
                     skill=rule.get("skill"),
                     channel=rule.get("channel"),
                     action=rule.get("action"),
+                    mode=rule.get("mode"),
                     candidates=[],
                     match_index=i,
                 )
