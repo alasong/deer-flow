@@ -9,10 +9,12 @@ Provides visibility into and management of the lightweight Owner Agent system:
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from deerflow.agents.owner import get_board, get_queue, get_registry
+from deerflow.runtime.runs.manager import RunManager
+from deerflow.runtime.runs.schemas import RunStatus
 from deerflow.tasks.approval import ApprovalGate
 from deerflow.tasks.model import Task
 
@@ -20,6 +22,14 @@ router = APIRouter(prefix="/api/owner", tags=["owner"])
 
 # Lazy-init approval gate singleton (reset by tests between runs)
 _approval_gate: ApprovalGate | None = None
+
+
+async def _get_run_manager(request: Request) -> RunManager:
+    """Get the process-wide RunManager from app state."""
+    mgr = getattr(request.app.state, "run_manager", None)
+    if mgr is None:
+        raise HTTPException(status_code=503, detail="Run manager not available")
+    return mgr
 
 
 def _get_approval_gate() -> ApprovalGate:
@@ -126,6 +136,48 @@ async def list_board(prefix: str = ""):
                 "updated_by": e.updated_by,
             }
             for e in entries
+        ]
+    }
+
+
+# ---------------------------------------------------------------------------
+# Runs (engine execution state)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/runs")
+async def list_runs(
+    status: str | None = None,
+    run_manager: RunManager = Depends(_get_run_manager),
+):
+    """List in-memory runs, optionally filtered by status.
+
+    Status values: pending, running, success, error, timeout, interrupted.
+    Returns engine-level run records with token usage, error info, etc.
+    """
+    status_filter = RunStatus(status) if status else None
+    records = await run_manager.list_memory_runs(status=status_filter)
+    return {
+        "runs": [
+            {
+                "run_id": r.run_id,
+                "thread_id": r.thread_id,
+                "assistant_id": r.assistant_id,
+                "status": r.status.value,
+                "on_disconnect": r.on_disconnect.value,
+                "user_id": r.user_id,
+                "created_at": r.created_at,
+                "updated_at": r.updated_at,
+                "error": r.error,
+                "model_name": r.model_name,
+                "total_input_tokens": r.total_input_tokens,
+                "total_output_tokens": r.total_output_tokens,
+                "total_tokens": r.total_tokens,
+                "llm_call_count": r.llm_call_count,
+                "message_count": r.message_count,
+                "stop_reason": r.stop_reason,
+            }
+            for r in records
         ]
     }
 

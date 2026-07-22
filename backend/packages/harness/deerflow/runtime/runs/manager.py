@@ -595,6 +595,19 @@ class RunManager:
                     logger.warning("Failed to map store row for run %s", run_id, exc_info=True)
         return sorted(records_by_id.values(), key=lambda record: record.created_at, reverse=True)[:limit]
 
+    async def list_memory_runs(self, *, status: RunStatus | None = None) -> list[RunRecord]:
+        """Return in-memory runs, optionally filtered by status.
+
+        Returns runs newest-first. Only returns runs currently held in memory
+        (active and recent in-process runs); historical runs must be queried
+        by thread via ``list_by_thread``.
+        """
+        async with self._lock:
+            records = list(self._runs.values())
+        if status is not None:
+            records = [r for r in records if r.status == status]
+        return sorted(records, key=lambda r: r.created_at, reverse=True)
+
     async def list_successful_regenerate_sources(
         self,
         thread_id: str,

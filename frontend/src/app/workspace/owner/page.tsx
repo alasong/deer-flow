@@ -40,7 +40,12 @@ interface Agent {
 interface Task {
   task_id: string;
   capability: string;
+  description: string;
   status: string;
+  priority: string;
+  agent_id?: string;
+  created_at: string;
+  updated_at?: string;
 }
 
 interface BoardEntry {
@@ -55,7 +60,11 @@ interface Approval {
   reason: string;
   requested_by: string;
   status: string;
+  approved_by: string | null;
+  rejected_by: string | null;
+  rejection_reason: string | null;
   created_at: string;
+  updated_at: string | null;
 }
 
 interface AgentsResponse {
@@ -73,6 +82,28 @@ interface BoardResponse {
 
 interface ApprovalsResponse {
   approvals: Approval[];
+}
+
+interface RunRecord {
+  run_id: string;
+  thread_id: string;
+  assistant_id: string | null;
+  status: string;
+  user_id: string | null;
+  created_at: string;
+  updated_at: string;
+  error: string | null;
+  model_name: string | null;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_tokens: number;
+  llm_call_count: number;
+  message_count: number;
+  stop_reason: string | null;
+}
+
+interface RunsResponse {
+  runs: RunRecord[];
 }
 
 // ---------------------------------------------------------------------------
@@ -145,6 +176,18 @@ function StatusBadge({ status }: { status: string }) {
   return <Badge variant={variant}>{status}</Badge>;
 }
 
+function PriorityBadge({ priority }: { priority: string }) {
+  const variant =
+    priority === "critical"
+      ? "destructive"
+      : priority === "high"
+        ? "default"
+        : priority === "normal"
+          ? "secondary"
+          : "outline";
+  return <Badge variant={variant}>{priority}</Badge>;
+}
+
 // ---------------------------------------------------------------------------
 // Page component
 // ---------------------------------------------------------------------------
@@ -154,6 +197,7 @@ export default function OwnerPage() {
   const queueQuery = useApi<QueueResponse>("/api/owner/queue");
   const boardQuery = useApi<BoardResponse>("/api/owner/board");
   const approvalsQuery = useApi<ApprovalsResponse>("/api/owner/approvals");
+  const runsQuery = useApi<RunsResponse>("/api/owner/runs");
 
   useEffect(() => {
     document.title = "Owner Dashboard - DeerFlow";
@@ -161,6 +205,19 @@ export default function OwnerPage() {
 
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [expandedReasons, setExpandedReasons] = useState<Set<string>>(new Set());
+
+  const toggleReason = useCallback((taskId: string) => {
+    setExpandedReasons((prev) => {
+      const next = new Set(prev);
+      if (next.has(taskId)) {
+        next.delete(taskId);
+      } else {
+        next.add(taskId);
+      }
+      return next;
+    });
+  }, []);
 
   const handleApprove = useCallback(async (taskId: string) => {
     setActionLoading(taskId);
@@ -212,13 +269,14 @@ export default function OwnerPage() {
     <WorkspaceContainer>
       <WorkspaceHeader />
       <WorkspaceBody>
-        <div className="mx-auto flex w-full max-w-(--container-width-lg) flex-col gap-6 p-6">
+        <div className="mx-auto flex w-full flex-col gap-6 p-6">
           <h1 className="text-2xl font-semibold">Owner Dashboard</h1>
 
           <Tabs defaultValue="agents">
             <TabsList>
               <TabsTrigger value="agents">Agents</TabsTrigger>
               <TabsTrigger value="queue">Queue</TabsTrigger>
+              <TabsTrigger value="runs">Runs</TabsTrigger>
               <TabsTrigger value="board">Board</TabsTrigger>
               <TabsTrigger value="approvals">Approvals</TabsTrigger>
             </TabsList>
@@ -301,64 +359,7 @@ export default function OwnerPage() {
 
             {/* ───── Queue ───── */}
             <TabsContent value="queue">
-              <div className="grid gap-6 lg:grid-cols-2">
-                <Card>
-                  <CardHeader className="flex flex-row items-center justify-between">
-                    <CardTitle>Pending</CardTitle>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => queueQuery.refetch()}
-                      disabled={queueQuery.loading}
-                    >
-                      {queueQuery.loading ? "Loading…" : "Refresh"}
-                    </Button>
-                  </CardHeader>
-                  <CardContent>
-                    {queueQuery.loading ? (
-                      <div className="text-muted-foreground text-sm">
-                        Loading…
-                      </div>
-                    ) : (
-                      <div className="overflow-x-auto">
-                        <Table>
-                          <TableHeader>
-                            <TableRow>
-                              <TableHead>Task ID</TableHead>
-                              <TableHead>Capability</TableHead>
-                              <TableHead>Status</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {queueQuery.data?.pending.map((task) => (
-                              <TableRow key={task.task_id}>
-                                <TableCell className="font-mono text-xs">
-                                  {task.task_id}
-                                </TableCell>
-                                <TableCell>{task.capability}</TableCell>
-                                <TableCell>
-                                  <StatusBadge status={task.status} />
-                                </TableCell>
-                              </TableRow>
-                            ))}
-                            {(queueQuery.data?.pending ?? []).length ===
-                              0 && (
-                              <TableRow>
-                                <TableCell
-                                  colSpan={3}
-                                  className="text-muted-foreground text-center"
-                                >
-                                  No pending tasks
-                                </TableCell>
-                              </TableRow>
-                            )}
-                          </TableBody>
-                        </Table>
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-
+              <div className="flex flex-col gap-6">
                 <Card>
                   <CardHeader className="flex flex-row items-center justify-between">
                     <CardTitle>Active</CardTitle>
@@ -382,7 +383,10 @@ export default function OwnerPage() {
                           <TableHeader>
                             <TableRow>
                               <TableHead>Task ID</TableHead>
+                              <TableHead>Description</TableHead>
                               <TableHead>Capability</TableHead>
+                              <TableHead>Priority</TableHead>
+                              <TableHead>Agent</TableHead>
                               <TableHead>Status</TableHead>
                             </TableRow>
                           </TableHeader>
@@ -392,7 +396,16 @@ export default function OwnerPage() {
                                 <TableCell className="font-mono text-xs">
                                   {task.task_id}
                                 </TableCell>
+                                <TableCell className="max-w-xs truncate">
+                                  {task.description ?? "—"}
+                                </TableCell>
                                 <TableCell>{task.capability}</TableCell>
+                                <TableCell>
+                                  <PriorityBadge priority={task.priority} />
+                                </TableCell>
+                                <TableCell className="font-mono text-xs">
+                                  {task.agent_id ?? "—"}
+                                </TableCell>
                                 <TableCell>
                                   <StatusBadge status={task.status} />
                                 </TableCell>
@@ -401,7 +414,7 @@ export default function OwnerPage() {
                             {(queueQuery.data?.active ?? []).length === 0 && (
                               <TableRow>
                                 <TableCell
-                                  colSpan={3}
+                                  colSpan={6}
                                   className="text-muted-foreground text-center"
                                 >
                                   No active tasks
@@ -415,8 +428,77 @@ export default function OwnerPage() {
                   </CardContent>
                 </Card>
 
+                <Card>
+                  <CardHeader className="flex flex-row items-center justify-between">
+                    <CardTitle>Pending</CardTitle>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => queueQuery.refetch()}
+                      disabled={queueQuery.loading}
+                    >
+                      {queueQuery.loading ? "Loading…" : "Refresh"}
+                    </Button>
+                  </CardHeader>
+                  <CardContent>
+                    {queueQuery.loading ? (
+                      <div className="text-muted-foreground text-sm">
+                        Loading…
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Task ID</TableHead>
+                              <TableHead>Description</TableHead>
+                              <TableHead>Capability</TableHead>
+                              <TableHead>Priority</TableHead>
+                              <TableHead>Status</TableHead>
+                              <TableHead>Created</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {queueQuery.data?.pending.map((task) => (
+                              <TableRow key={task.task_id}>
+                                <TableCell className="font-mono text-xs">
+                                  {task.task_id}
+                                </TableCell>
+                                <TableCell className="max-w-xs truncate">
+                                  {task.description ?? "—"}
+                                </TableCell>
+                                <TableCell>{task.capability}</TableCell>
+                                <TableCell>
+                                  <PriorityBadge priority={task.priority} />
+                                </TableCell>
+                                <TableCell>
+                                  <StatusBadge status={task.status} />
+                                </TableCell>
+                                <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                                  {formatTimestamp(task.created_at)}
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                            {(queueQuery.data?.pending ?? []).length ===
+                              0 && (
+                              <TableRow>
+                                <TableCell
+                                  colSpan={6}
+                                  className="text-muted-foreground text-center"
+                                >
+                                  No pending tasks
+                                </TableCell>
+                              </TableRow>
+                            )}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
                 {queueQuery.error && (
-                  <div className="text-destructive col-span-full text-sm">
+                  <div className="text-destructive text-sm">
                     Failed to load queue: {queueQuery.error}
                   </div>
                 )}
@@ -491,6 +573,95 @@ export default function OwnerPage() {
               </Card>
             </TabsContent>
 
+            {/* ───── Runs ───── */}
+            <TabsContent value="runs">
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between">
+                  <CardTitle>Runs</CardTitle>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => runsQuery.refetch()}
+                    disabled={runsQuery.loading}
+                  >
+                    {runsQuery.loading ? "Loading…" : "Refresh"}
+                  </Button>
+                </CardHeader>
+                <CardContent>
+                  {runsQuery.error && (
+                    <div className="text-destructive mb-4 text-sm">
+                      Failed to load runs: {runsQuery.error}
+                    </div>
+                  )}
+                  {runsQuery.loading ? (
+                    <div className="text-muted-foreground text-sm">
+                      Loading…
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Run ID</TableHead>
+                            <TableHead>Thread ID</TableHead>
+                            <TableHead>Assistant</TableHead>
+                            <TableHead>Status</TableHead>
+                            <TableHead>Model</TableHead>
+                            <TableHead>Tokens</TableHead>
+                            <TableHead>Created</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {runsQuery.data?.runs.map((run) => (
+                            <TableRow key={run.run_id}>
+                              <TableCell className="max-w-[120px] truncate font-mono text-xs">
+                                {run.run_id}
+                              </TableCell>
+                              <TableCell className="max-w-[120px] truncate font-mono text-xs">
+                                {run.thread_id}
+                              </TableCell>
+                              <TableCell className="max-w-[100px] truncate">
+                                {run.assistant_id ?? "—"}
+                              </TableCell>
+                              <TableCell>
+                                <StatusBadge status={run.status} />
+                                {run.error && (
+                                  <div className="mt-0.5 max-w-[200px] truncate text-xs text-destructive" title={run.error}>
+                                    {run.error}
+                                  </div>
+                                )}
+                              </TableCell>
+                              <TableCell className="max-w-[100px] truncate text-xs">
+                                {run.model_name ?? "—"}
+                              </TableCell>
+                              <TableCell className="text-xs whitespace-nowrap">
+                                {run.total_tokens > 0
+                                  ? `${run.total_input_tokens}i/${run.total_output_tokens}o`
+                                  : "—"}
+                              </TableCell>
+                              <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                                {formatTimestamp(run.created_at)}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                          {(runsQuery.data?.runs ?? []).length === 0 && (
+                            <TableRow>
+                              <TableCell
+                                colSpan={7}
+                                className="text-muted-foreground text-center"
+                              >
+                                No runs
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
             {/* ───── Approvals ───── */}
             <TabsContent value="approvals">
               <Card>
@@ -529,63 +700,112 @@ export default function OwnerPage() {
                             <TableHead>Reason</TableHead>
                             <TableHead>Requested By</TableHead>
                             <TableHead>Status</TableHead>
+                            <TableHead>Created</TableHead>
                             <TableHead className="text-right">
                               Actions
                             </TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {approvalsQuery.data?.approvals.map((approval) => (
-                            <TableRow key={approval.task_id}>
-                              <TableCell className="font-mono text-xs">
-                                {approval.task_id}
-                              </TableCell>
-                              <TableCell className="max-w-xs truncate">
-                                {truncate(approval.reason)}
-                              </TableCell>
-                              <TableCell>{approval.requested_by}</TableCell>
-                              <TableCell>
-                                <StatusBadge status={approval.status} />
-                              </TableCell>
-                              <TableCell className="text-right">
-                                {approval.status === "pending" ? (
-                                  <div className="flex justify-end gap-1">
-                                    <Button
-                                      size="sm"
-                                      variant="default"
-                                      disabled={actionLoading === approval.task_id}
-                                      onClick={() => handleApprove(approval.task_id)}
+                          {approvalsQuery.data?.approvals.map((approval) => {
+                            const reasonExpanded = expandedReasons.has(
+                              approval.task_id,
+                            );
+                            return (
+                              <TableRow key={approval.task_id}>
+                                <TableCell className="font-mono text-xs">
+                                  {approval.task_id}
+                                </TableCell>
+                                <TableCell className="max-w-sm">
+                                  <div className="flex flex-col gap-1">
+                                    <span
+                                      className={
+                                        reasonExpanded
+                                          ? ""
+                                          : "line-clamp-2 max-h-[3em] overflow-hidden"
+                                      }
                                     >
-                                      {actionLoading === approval.task_id
-                                        ? "Loading…"
-                                        : "Approve"}
-                                    </Button>
-                                    <Button
-                                      size="sm"
-                                      variant="destructive"
-                                      disabled={actionLoading === approval.task_id}
-                                      onClick={() => handleReject(approval.task_id)}
-                                    >
-                                      {actionLoading === approval.task_id
-                                        ? "Loading…"
-                                        : "Reject"}
-                                    </Button>
+                                      {approval.reason}
+                                    </span>
+                                    {approval.reason.length > 120 && (
+                                      <button
+                                        type="button"
+                                        className="text-muted-foreground hover:text-foreground w-fit cursor-pointer text-xs"
+                                        onClick={() =>
+                                          toggleReason(approval.task_id)
+                                        }
+                                      >
+                                        {reasonExpanded
+                                          ? "Show less"
+                                          : "Show more"}
+                                      </button>
+                                    )}
                                   </div>
-                                ) : (
-                                  <span className="text-muted-foreground text-xs">
-                                    {approval.status === "approved"
-                                      ? "Approved"
-                                      : "Rejected"}
-                                  </span>
-                                )}
-                              </TableCell>
-                            </TableRow>
-                          ))}
+                                </TableCell>
+                                <TableCell className="whitespace-nowrap">
+                                  {approval.requested_by}
+                                </TableCell>
+                                <TableCell>
+                                  <StatusBadge status={approval.status} />
+                                </TableCell>
+                                <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                                  {formatTimestamp(approval.created_at)}
+                                </TableCell>
+                                <TableCell className="text-right">
+                                  {approval.status === "pending" ? (
+                                    <div className="flex justify-end gap-1">
+                                      <Button
+                                        size="sm"
+                                        variant="default"
+                                        disabled={
+                                          actionLoading === approval.task_id
+                                        }
+                                        onClick={() =>
+                                          handleApprove(approval.task_id)
+                                        }
+                                      >
+                                        {actionLoading === approval.task_id
+                                          ? "Loading…"
+                                          : "Approve"}
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant="destructive"
+                                        disabled={
+                                          actionLoading === approval.task_id
+                                        }
+                                        onClick={() =>
+                                          handleReject(approval.task_id)
+                                        }
+                                      >
+                                        {actionLoading === approval.task_id
+                                          ? "Loading…"
+                                          : "Reject"}
+                                      </Button>
+                                    </div>
+                                  ) : (
+                                    <div className="text-muted-foreground flex flex-col items-end gap-0.5 text-xs">
+                                      <span>
+                                        {approval.status === "approved"
+                                          ? `Approved by ${approval.approved_by ?? "—"}`
+                                          : `Rejected by ${approval.rejected_by ?? "—"}`}
+                                      </span>
+                                      {approval.rejection_reason && (
+                                        <span className="italic">
+                                          {approval.rejection_reason}
+                                        </span>
+                                      )}
+                                    </div>
+                                  )}
+                                </TableCell>
+                              </TableRow>
+                            );
+                          })}
                           {(approvalsQuery.data?.approvals ?? []).length ===
                             0 && (
                             <TableRow>
                               <TableCell
-                                colSpan={5}
+                                colSpan={6}
                                 className="text-muted-foreground text-center"
                               >
                                 No approvals
