@@ -249,3 +249,5 @@ class ThreadState(AgentState):
     delegations: Annotated[list[DelegationEntry], merge_delegations]
     skill_context: Annotated[list[SkillEntry], merge_skill_context]
     summary_text: NotRequired[str | None]
+    offload_summary: NotRequired[str | None]
+    offload_path: NotRequired[str | None]

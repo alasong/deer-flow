@@ -323,6 +323,18 @@ def build_middlewares(
         )
     )
 
+    # Context offload middleware — saves the full conversation context to disk
+    # when the message token count reaches the offload threshold, then trims
+    # state messages to keep only the most recent N.  Placed between DurableContext
+    # (which captures current delegations/skills into state) and Summarization
+    # (which consumes those same channels), so the offload dump includes the
+    # latest delegation and skill context captured this turn.
+    from deerflow.agents.middlewares.context_offload_middleware import ContextOffloadMiddleware
+
+    offload_config = resolved_app_config.offload
+    if offload_config.enabled:
+        middlewares.append(ContextOffloadMiddleware.from_config(offload_config))
+
     # Add summarization middleware if enabled
     summarization_middleware = _create_summarization_middleware(app_config=resolved_app_config)
     if summarization_middleware is not None:

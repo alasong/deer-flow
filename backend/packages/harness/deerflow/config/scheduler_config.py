@@ -1,4 +1,56 @@
+from __future__ import annotations
+
 from pydantic import BaseModel, Field
+
+
+class ContextFilter(BaseModel):
+    """Filter that checks thread context before dispatching a scheduled task.
+
+    When ``require_recent_activity`` is true, the scheduler will only dispatch
+    the task if the target thread has had activity within ``max_idle_days``.
+    """
+
+    require_recent_activity: bool = Field(
+        default=False,
+        description="If true, skip the task when the thread has been idle "
+        "longer than max_idle_days.",
+    )
+    max_idle_days: int = Field(
+        default=3,
+        ge=1,
+        description="Maximum number of days since the thread's last activity. "
+        "Only meaningful when require_recent_activity is true.",
+    )
+
+
+class ScheduledTask(BaseModel):
+    """Config-level representation of a scheduled task with enhanced features.
+
+    This model lives at the config/control-plane layer and is the source of
+    truth for defining what should run, when, and under what constraints.
+    """
+
+    id: str = Field(description="Unique identifier for the task.")
+    trigger: str = Field(
+        description="Cron expression or trigger spec (e.g. '0 9 * * *')."
+    )
+    thread_id: str | None = Field(
+        default=None,
+        description="Target thread ID. When set, the task runs on this "
+        "specific thread. When None, a new thread is created per run.",
+    )
+    prompt: str = Field(description="The prompt / instruction for the agent run.")
+    max_runs_per_day: int = Field(
+        default=1,
+        ge=0,
+        description="Maximum number of runs per day for this task. "
+        "Set to 0 for unlimited.",
+    )
+    context_filter: ContextFilter | None = Field(
+        default=None,
+        description="Optional context filter that gates dispatch based on "
+        "thread state (e.g. last activity time).",
+    )
 
 
 class SchedulerConfig(BaseModel):

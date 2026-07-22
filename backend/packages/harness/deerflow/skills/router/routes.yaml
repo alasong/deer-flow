@@ -1,0 +1,52 @@
+# Default Skill Route Table
+#
+# Each route has a ``match`` block specifying required RoutingContext fields
+# (domain, complexity, task_type). All specified fields must match for the route
+# to apply; unspecified fields act as wildcards.
+#
+# First match wins — order routes from most-specific to most-general.
+#
+# Fields in a matched route:
+#   skill    — Skill to activate (e.g. "pdf")
+#   channel  — Channel within that skill (e.g. "full", "analysis", "planning")
+#   action   — Direct action without a skill (e.g. "direct" for simple Q&A)
+
+routes:
+  # ── Tech: Heavy analysis & research ─────────────────────────────────
+  - match: { domain: "tech", complexity: "high", task_type: "analysis" }
+    skill: "pdf"
+    channel: "analysis"
+
+  - match: { domain: "tech", complexity: "high", task_type: "research" }
+    skill: "deep-research"
+
+  # ── Tech: Implementation & heavy tasks ─────────────────────────────
+  - match: { domain: "tech", complexity: "high", task_type: "implementation" }
+    skill: "pdf"
+    channel: "full"
+
+  - match: { domain: "tech", complexity: "medium", task_type: "implementation" }
+    skill: "pdf"
+    channel: "standard"
+
+  # ── Tech: Planning ─────────────────────────────────────────────────
+  - match: { domain: "tech", complexity: "high", task_type: "planning" }
+    skill: "pdf"
+    channel: "planning"
+
+  # ── Science: Research & analysis ───────────────────────────────────
+  - match: { domain: "science", complexity: "high", task_type: "research" }
+    skill: "deep-research"
+
+  - match: { domain: "science", complexity: "high", task_type: "analysis" }
+    skill: "pdf"
+    channel: "analysis"
+
+  # ── General: Simple queries ────────────────────────────────────────
+  - match: { task_type: "query", complexity: "low" }
+    action: "direct"
+
+  # ── Catch-all fallback (no match constraints = matches anything) ───
+  - match: {}
+    skill: "pdf"
+    channel: "standard"
