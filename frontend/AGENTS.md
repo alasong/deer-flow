@@ -60,6 +60,10 @@ E2E tests live under `tests/e2e/` and use Playwright with Chromium. They mock al
 - 为 "use client" 页面写单元测试验证交互行为（该走 E2E）
 - 在单元测试中验证后端 API 的业务逻辑（后端已有测试覆盖）
 
+**fetch mock 的适用判定：**
+- ✅ **有价值** — 测试前端如何构造请求（query params、headers、body）、如何解析响应、如何处理错误（如 `workspace-changes/api.test.ts`、`auth/server.test.ts`）
+- ❌ **低价值** — 测试 mock 返回的特定数据是否出现在组件/页面中（复制了后端测试的行为验证），应改为 E2E 测试验证真实交互
+
 ## Architecture
 
 ```
