@@ -341,7 +341,18 @@ def build_middlewares(
 
     offload_config = resolved_app_config.offload
     if offload_config.enabled:
-        middlewares.append(ContextOffloadMiddleware.from_config(offload_config))
+        # Create a model for compartment extraction when enabled
+        offload_model = None
+        if offload_config.compartment_enabled:
+            try:
+                offload_model = create_chat_model(
+                    thinking_enabled=False,
+                    app_config=resolved_app_config,
+                    attach_tracing=False,
+                )
+            except Exception:
+                logger.warning("Failed to create model for offload compartments; continuing without", exc_info=True)
+        middlewares.append(ContextOffloadMiddleware.from_config(offload_config, model=offload_model))
 
     # Add summarization middleware if enabled
     summarization_middleware = _create_summarization_middleware(app_config=resolved_app_config)

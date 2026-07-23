@@ -328,3 +328,4 @@ class ThreadState(AgentState):
     offload_summary: NotRequired[str | None]
     offload_path: NotRequired[str | None]
     offload_key_decisions: NotRequired[list[dict] | None]
+    offload_compartments: NotRequired[dict | None]

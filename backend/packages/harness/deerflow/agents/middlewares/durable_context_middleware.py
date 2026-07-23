@@ -66,11 +66,41 @@ def _insert_after_leading_system_messages(messages: list, injected: list) -> lis
     return [*messages[:index], *injected, *messages[index:]]
 
 
-def _render_durable_context_data(summary_text: str | None, ledger: list, skills: list) -> str:
+def _render_durable_context_data(summary_text: str | None, ledger: list, skills: list, compartments: dict | None = None) -> str:
     data_parts: list[str] = []
     if summary_text:
         bounded_summary = _bound_text(str(summary_text), _SUMMARY_RENDER_CHAR_BUDGET)
         data_parts.append(f"## Conversation summary so far\n{escape(bounded_summary, quote=False)}")
+
+    # Render structured offload compartments if present
+    if compartments:
+        comp_parts: list[str] = []
+        if compartments.get("decisions"):
+            comp_parts.append(
+                "### Decisions\n- " + "\n- ".join(escape(d, quote=False) for d in compartments["decisions"])
+            )
+        if compartments.get("specs"):
+            comp_parts.append(
+                "### Active Specs\n- " + "\n- ".join(escape(s, quote=False) for s in compartments["specs"])
+            )
+        tp = compartments.get("task_progress", {})
+        if tp.get("goal") or tp.get("phase"):
+            progress_lines = []
+            if tp.get("goal"):
+                progress_lines.append(f"Goal: {escape(tp['goal'], quote=False)}")
+            if tp.get("phase"):
+                progress_lines.append(f"Phase: {escape(tp['phase'], quote=False)}")
+            if tp.get("completed"):
+                progress_lines.append("Completed:\n  - " + "\n  - ".join(escape(c, quote=False) for c in tp["completed"]))
+            if tp.get("pending"):
+                progress_lines.append("Pending:\n  - " + "\n  - ".join(escape(p, quote=False) for p in tp["pending"]))
+            comp_parts.append("### Task Progress\n" + "\n".join(progress_lines))
+        if compartments.get("findings"):
+            comp_parts.append(
+                "### Key Findings\n- " + "\n- ".join(escape(f, quote=False) for f in compartments["findings"])
+            )
+        if comp_parts:
+            data_parts.append("## Offload Compartments\n" + "\n\n".join(comp_parts))
 
     ledger_block = render_delegation_ledger(ledger or [])
     if ledger_block:
@@ -252,6 +282,7 @@ class DurableContextMiddleware(AgentMiddleware[AgentState]):
             state.get("summary_text"),
             state.get("delegations") or [],
             state.get("skill_context") or [],
+            compartments=state.get("offload_compartments"),
         )
         if not data_block:
             return request
