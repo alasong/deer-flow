@@ -301,11 +301,19 @@ rpd action=methodology.list params='{"phase":"P","mode":"architecture"}'
 rpd action=methodology.get params='{"name":"adr-first"}'
 ```
 
-| 场景 | 推荐方法论 |
-|------|-----------|
-| P+architecture | ADR-First |
-| P+spike | Spike-and-Stabilize |
-| D+implement | TDD 或 API-First |
+| 场景 | 推荐方法论 | 权威级别 |
+|------|-----------|---------|
+| P+architecture | ADR-First、Brainstorming | guidance |
+| P+research | Brainstorming | guidance |
+| P+decompose | Writing Plans | guidance |
+| P+spike | Spike-and-Stabilize | guidance |
+| P+plan | Writing Plans、Brainstorming | guidance |
+| D+implement | TDD、Subagent-Driven Dev | guidance |
+| D+design | ADR-First、Subagent-Driven Dev | guidance |
+| C+review | Code Review | guidance |
+| C+verify | Verification Before Completion | guidance |
+| C+evaluate/audit | Systematic Debugging | guidance |
+| A+standardize/merge | Finish Branch | guidance |
 
 方法论是参考，不是教条。你的判断力 > 方法论的规则。
 

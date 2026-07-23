@@ -251,6 +251,8 @@ def cmd_tree_node_done(node_id: str) -> dict:
     state = require_state()
     node = _find_node(state["root"], node_id)
     node["status"] = "done"
+    if node_id == state["root"]["id"]:
+        state["status"] = "done"
     save_state(state)
     total = _count_tree_nodes(state["root"])
     terminals = _count_terminal_nodes(state["root"])
@@ -400,7 +402,8 @@ def cmd_tree_expand(node_id: str, children_spec: list[dict]) -> dict:
     if parent.get("children"):
         raise ValueError(f"Node {node_id} already has children. Prune first or expand a leaf node.")
 
-    created = []
+    # Pass 1: create all nodes
+    created_nodes = []
     for spec in children_spec:
         child = make_node(
             phase=spec.get("phase", "D"),
@@ -412,13 +415,29 @@ def cmd_tree_expand(node_id: str, children_spec: list[dict]) -> dict:
             dependencies=spec.get("dependencies", []),
         )
         parent.setdefault("children", []).append(child)
-        created.append({
-            "id": child["id"],
-            "phase": child["phase"],
-            "mode": child["mode"],
-            "style": child.get("style"),
-            "title": child.get("title", ""),
-        })
+        created_nodes.append(child)
+
+    # Pass 2: resolve dependency references (support both integer index and string id)
+    for i, spec in enumerate(children_spec):
+        raw_deps = spec.get("dependencies", [])
+        resolved = []
+        for d in raw_deps:
+            if isinstance(d, int):
+                if 0 <= d < len(created_nodes):
+                    resolved.append(created_nodes[d]["id"])
+                else:
+                    raise ValueError(f"Child {i}: dependency index {d} out of range (0-{len(created_nodes)-1})")
+            else:
+                resolved.append(str(d))
+        created_nodes[i]["dependencies"] = resolved
+
+    created = [{
+        "id": n["id"],
+        "phase": n["phase"],
+        "mode": n["mode"],
+        "style": n.get("style"),
+        "title": n.get("title", ""),
+    } for n in created_nodes]
 
     parent["status"] = "waiting_for_children"
     save_state(state)
@@ -494,8 +513,24 @@ def cmd_phase_set_mode(node_id: str, mode: str) -> dict:
 
 def cmd_phase_transition(node_id: str, new_phase: str) -> dict:
     new_phase = new_phase.upper()
+    if new_phase == "DONE":
+        state = require_state()
+        node = _find_node(state["root"], node_id)
+        old_phase = node["phase"]
+        node["phase"] = "DONE"
+        node["status"] = "done"
+        if node_id == state["root"]["id"]:
+            state["status"] = "done"
+        save_state(state)
+        return {
+            "action": "phase_transition",
+            "node_id": node_id,
+            "from": old_phase,
+            "to": "DONE",
+            "tick": None,
+        }
     if new_phase not in PHASES:
-        raise ValueError(f"Invalid phase '{new_phase}'. Use P, D, C, or A.")
+        raise ValueError(f"Invalid phase '{new_phase}'. Use P, D, C, A, or DONE.")
 
     state = require_state()
     node = _find_node(state["root"], node_id)
