@@ -4,6 +4,13 @@ status: "accepted"
 date: "2026-07-22"
 context: "Lead Agent 是单体架构，一个 agent 在一个 thread 内完成所有工作。多 lead 组成开发管线（设计→编码→审查→测试）需要跨 agent 状态传递、拓扑编排、持久化协调。"
 rationale: "不在 Lead 内部加管线逻辑（已经太复杂，33个中间件/700行factory），而是加一个正交的编排层在 Lead 之上，通过多次 run_agent() 调用来实现管线"
+---
+
+> **PDF → RPD 注解 (2026-07-23)：** 本文中的 PDF 引用（D002、D003、架构格局图、PDF 管线）已过时。PDF 引擎已被 RPD（Recursive PDCA，见 `skills/public/rpd/`）取代：
+> - D002 "Goal × PDF 不做运行时集成" → 等价于 Goal × RPD 不做运行时集成
+> - D003 "PDF = 确定性蓝图" → 已演进为 RPD = 递归树 + 灵活映射
+> - "架构格局"中的 PDF 蓝图管线 → 由 RPD 替代
+> - Pipeline Orchestrator 本身不受影响，它编排的是 Lead Agent 而非具体 skill
 decisions:
   - id: "D001"
     title: "Pipeline Orchestrator 独立于 Goal 和 PDF"
