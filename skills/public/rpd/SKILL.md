@@ -22,50 +22,59 @@ RPD 是 PDCA 的**递归自相似**实现。每个工作节点都是一个 PDCA 
 
 ---
 
-## 效率指引（减少 Token 消耗）
+## 执行策略
 
-RPD 工作流默认每轮 LLM 调用都有 ~8k 固定 system prompt 开销。**减少轮次 = 直接省 token。**
-
-### 关键优化命令
-
-| 命令 | 替代 | 节省 |
-|------|------|------|
-| `init-and-expand` | `init` + `expand` 两步 | 省 1 轮 |
-| `tree.node-advance` | `node-start` + work + `node-done` 三轮 | 省 1-2 轮/节点 |
-| `tree.batch-done` | N 次 `node-done` | 省 N-1 轮 |
-
-### 使用规则
-
-- **init-and-expand**: 不要 init 后再 expand。一步到位。init 时已经知道要展开什么就直接提供 children。
-- **node-advance**: 当节点不需要在 start/done 之间插入实质工具调用（如 LLM 自带知识可完成的节点、简单数据穿透），直接用 advance。
-- **batch-done**: 同一波次多个节点同时完成时，批量上报。不要逐个 node-done。
-- **避免多余 tick**: `tree.expand` 和 `phase.transition` 已返回 tick 结果。不需要再额外调 `tree.tick`。
-- **避免 tree.status / state**: 只在需要诊断时使用。日常操作走 tick 就够了。
-
-### Subagent 执行策略
+### 优先用 Subagent（调研/分析/编码类节点强制）
 
 叶子节点用 `task` tool（subagent）还是直接执行，取决于节点"重量"：
 
 | 节点特征 | 执行方式 | 原因 |
 |----------|---------|------|
-| 1-2 步可完成（如简单搜索、数据穿透） | `node-advance` 直接走 | subagent 冷启动开销 > 直接做 |
-| 需要多步工具调用（如调研、编码、分析） | `task` 派发 subagent | context 隔离，内部轮次不污染 lead |
+| **调研、分析、编码、多步工具调用** | **`task` 派发 subagent** | context 隔离，内部轮次不污染 lead |
 | 同 wave 节点（无依赖，可并行） | `task` 并行派发，一次全发 | 默认 3 并发，同时推进 |
-| 强依赖链中的中间节点 | 视重量而定：重→subagent，轻→advance | 链式无并行收益，但 isolation 仍有价值 |
+| 强依赖链中的中间节点 | 重节点→subagent，轻→advance | 链式无并行收益，但 isolation 仍有价值 |
+| LLM 自带知识可完成、纯数据穿透 | `node-advance` 直接走 | subagent 冷启动开销 > 直接做 |
+
+**注意**：调研类节点即使看起来"搜一下就行"，也应走 subagent。subagent 的 context 隔离价值 > 省 1 轮的开销。直觉上"1-2 步"的搜索在 subagent 内部仍然可以 advance，不增加额外轮次。
 
 Subagent 适用示例：
 ```
-rpd node-start NODE_ID
-task prompt="搜索北京未来7天天气数据，收集温度/湿度/风力" subagent_type="general-purpose"
-rpd node-advance NODE_ID action=done result_summary="天气数据已收集"
+# 调研类节点 → subagent，同 wave 可并行
+rpd node-start NODE_ID_1
+task prompt="采集杭州过去5年房价数据，分析走势" subagent_type="general-purpose"
+rpd node-done NODE_ID_1
 
-# 同一波次可并行：
+rpd node-start NODE_ID_2  
+task prompt="调研杭州就业市场与经济形势" subagent_type="general-purpose"
+rpd node-done NODE_ID_2
+
+# 同一波次可批量并行：
+rpd node-start NODE_ID_3
 task prompt="调研 LangGraph" subagent_type="general-purpose"
+rpd node-start NODE_ID_4
 task prompt="调研 CrewAI"    subagent_type="general-purpose"
+rpd node-start NODE_ID_5
 task prompt="调研 AutoGen"   subagent_type="general-purpose"
 # 三个 subagent 并行，完成后统一 batch-done
-rpd batch-done node_ids=[id1,id2,id3]
+rpd batch-done node_ids=[NODE_ID_3,NODE_ID_4,NODE_ID_5]
 ```
+
+### 效率指引（减少 Token 消耗）
+
+RPD 工作流默认每轮 LLM 调用都有 ~8k 固定 system prompt 开销。**减少轮次 = 直接省 token。** 在上述 subagent 策略基础上，用以下命令进一步优化：
+
+| 命令 | 替代 | 节省 |
+|------|------|------|
+| `init-and-expand` | `init` + `expand` 两步 | 省 1 轮 |
+| `tree.batch-done` | N 次 `node-done` | 省 N-1 轮 |
+
+### 使用规则
+
+- **init-and-expand**: 不要 init 后再 expand。一步到位。init 时已经知道要展开什么就直接提供 children。
+- **node-advance**: 仅用于 LLM 自带知识可完成的节点或纯数据穿透。调研/分析/编码类节点不要用 advance 跳过 subagent。
+- **batch-done**: 同一波次多个节点同时完成时，批量上报。不要逐个 node-done。
+- **避免多余 tick**: `tree.expand` 和 `phase.transition` 已返回 tick 结果。不需要再额外调 `tree.tick`。
+- **避免 tree.status / state**: 只在需要诊断时使用。日常操作走 tick 就够了。
 
 ### 轮次计数规则
 

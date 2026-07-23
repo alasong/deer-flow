@@ -121,6 +121,9 @@ function getResolvedMode(
   mode: ThreadStreamOptions["context"]["mode"],
   supportsThinking: boolean,
 ): SidecarInputMode {
+  if (mode === "ultra") {
+    return "ultra";
+  }
   if (!supportsThinking && mode !== "flash") {
     return "flash";
   }

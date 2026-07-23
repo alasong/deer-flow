@@ -203,6 +203,9 @@ function getResolvedMode(
   mode: InputMode | undefined,
   supportsThinking: boolean,
 ): InputMode {
+  if (mode === "ultra") {
+    return "ultra";
+  }
   if (!supportsThinking && mode !== "flash") {
     return "flash";
   }
