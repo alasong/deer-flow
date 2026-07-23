@@ -110,6 +110,11 @@ def make_node(
         "dependencies": dependencies or [],
         "children": [],
         "decision_log": [],
+        "produced": {
+            "files": [],
+            "spec_delta": {"added": [], "modified": [], "removed": []},
+            "decisions": [],
+        },
     }
 
 
@@ -294,3 +299,26 @@ def _find_parent_child_index(node: dict, target_id: str) -> tuple[dict | None, i
         if parent is not None:
             return parent, idx
     return None, -1
+
+
+def _aggregate_produced(children: list[dict]) -> dict:
+    """Aggregate 'produced' fields from multiple child nodes.
+
+    Merges files, spec_delta.added, and decisions across children.
+    Returns a dict suitable for tick's children_done aggregated field.
+    """
+    files: list[dict] = []
+    spec_added: list[dict] = []
+    decisions: list[dict] = []
+
+    for c in children:
+        p = c.get("produced", {})
+        files.extend(p.get("files", []))
+        spec_added.extend(p.get("spec_delta", {}).get("added", []))
+        decisions.extend(p.get("decisions", []))
+
+    return {
+        "files": files,
+        "spec_added": spec_added,
+        "decisions": decisions,
+    }

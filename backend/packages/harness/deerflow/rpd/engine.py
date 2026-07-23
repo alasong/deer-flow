@@ -18,6 +18,7 @@ from .shared import (
     list_available_methodologies, get_methodology, get_methodology_names_for,
     _collect_leaves, _all_deps_done, _resolve_waves,
     _count_tree_nodes, _find_node_chain, _find_parent_child_index,
+    _aggregate_produced,
 )
 
 
@@ -143,6 +144,7 @@ def _do_tree_tick(state: dict) -> dict:
                     "title": node.get("title", ""),
                     "action": "children_done",
                     "summary": _children_status_summary(children),
+                    "aggregated": _aggregate_produced(children),
                 })
             return
 
@@ -247,10 +249,12 @@ def cmd_tree_node_start(node_id: str) -> dict:
     }
 
 
-def cmd_tree_node_done(node_id: str) -> dict:
+def cmd_tree_node_done(node_id: str, produced: dict | None = None) -> dict:
     state = require_state()
     node = _find_node(state["root"], node_id)
     node["status"] = "done"
+    if produced:
+        node["produced"] = produced
     if node_id == state["root"]["id"]:
         state["status"] = "done"
     save_state(state)
@@ -333,11 +337,13 @@ def cmd_tree_node_advance(node_id: str, action: str = "done",
 
 
 def cmd_tree_batch_done(node_ids: list[str],
-                        summaries: dict[str, str] | None = None) -> dict:
+                        summaries: dict[str, str] | None = None,
+                        produced_map: dict[str, dict] | None = None) -> dict:
     """Mark multiple pending leaf nodes as done in one call.
 
     Skips nodes that are not pending (returns per-node errors).
-    Optionally attach summaries to each node's decision_log.
+    Optionally attach summaries to each node's decision_log
+    and produced payload per node.
     """
     state = require_state()
     results: list[dict] = []
@@ -357,6 +363,8 @@ def cmd_tree_batch_done(node_ids: list[str],
                 "event": "batch_done",
                 "summary": summaries[node_id],
             })
+        if produced_map and node_id in produced_map:
+            node["produced"] = produced_map[node_id]
         results.append({"id": node_id, "status": "done"})
 
     save_state(state)
