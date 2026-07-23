@@ -84,6 +84,20 @@ rpd batch-done node_ids=[id1,id2,id3]
 
 ---
 
+### 代码类任务：利用项目索引（P/decompose 前置）
+
+当 RPD 的 P/decompose 阶段涉及**代码分析或重构**时，不要自己 `ls`/`grep` 扫描文件结构。使用项目索引：
+
+1. **检查索引** — `.fat/index/files.txt` 和 `.fat/index/symbols.json` 是否存在
+2. **刷新索引**（如过期）— `bash("python3 ...")` 或调用 index-refresh 的等价操作刷新符号索引
+3. **读索引了解结构** — 先读 `symbols.json` 的 `by_kind` 概览，找出涉及的关键模块
+4. **基于索引做拆解决策** — 知道代码组织后再决定如何分解，不是盲目逐文件扫描
+5. **只在需要时读具体文件** — 索引指明哪个文件包含什么，按需 `read_file`
+
+这样就避免了 decompose 阶段 `find . -name "*.py"` + 逐文件 read 的重复扫描开销，也确保分解粒度基于真实的代码结构。
+
+---
+
 ## 核心概念
 
 ### PCCycle 节点
