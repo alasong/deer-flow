@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
 from langchain_core.callbacks import BaseCallbackHandler
-from langchain_core.messages import AIMessage, AnyMessage, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, AnyMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.types import Command
 
 from deerflow.agents.human_input import read_human_input_response
@@ -217,8 +217,11 @@ class RunJournal(BaseCallbackHandler):
             [len(batch) for batch in messages],
         )
 
-        # Capture the first user message sent to the lead agent in this run.
+        # Record input composition breakdown for every LLM call.
         caller = self._identify_caller(tags)
+        self._record_input_breakdown(messages, caller=caller, call_index=self._llm_call_index)
+
+        # Capture the first user message sent to the lead agent in this run.
         if caller == "lead_agent" and not self._first_human_msg and messages:
             for batch in reversed(messages):
                 for m in reversed(batch):
@@ -436,6 +439,78 @@ class RunJournal(BaseCallbackHandler):
                 continue
             if self._should_reconcile_tool_message(message):
                 self._persist_tool_result_message(message)
+
+    def _record_input_breakdown(
+        self,
+        batches: list[list[BaseMessage]],
+        *,
+        caller: str,
+        call_index: int,
+    ) -> None:
+        """Record input message composition breakdown for an LLM call.
+
+        Each message is classified by role and estimated token count
+        (chars / 4) to show what proportion of the input context comes
+        from system prompt, history, tool results, memory, etc.
+        """
+        breakdown: dict[str, dict[str, int | str]] = {}
+        total_chars = 0
+        first_system_seen = False
+
+        for batch in batches:
+            for msg in batch:
+                role = "unknown"
+                label = None
+
+                if isinstance(msg, SystemMessage):
+                    if not first_system_seen:
+                        role = "system"
+                        label = "system_prompt"
+                        first_system_seen = True
+                    else:
+                        role = "system"
+                        label = "system_injection"
+                elif isinstance(msg, HumanMessage):
+                    role = "human"
+                    # Detect memory injection by name pattern
+                    name = getattr(msg, "name", "") or ""
+                    if name in ("memory", "memory_context"):
+                        label = "memory"
+                    else:
+                        label = "user_input"
+                elif isinstance(msg, AIMessage):
+                    role = "assistant"
+                    label = "history_ai"
+                elif isinstance(msg, ToolMessage):
+                    role = "tool"
+                    label = "history_tool"
+                else:
+                    role = type(msg).__name__
+
+                text = self._message_text(msg)
+                chars = len(text)
+                total_chars += chars
+
+                key = label or role
+                if key not in breakdown:
+                    breakdown[key] = {"chars": 0, "count": 0}
+                breakdown[key]["chars"] += chars  # type: ignore[union-attr]
+                breakdown[key]["count"] += 1  # type: ignore[union-attr]
+
+        # Estimate tokens (chars / 4, rough — Chinese text is denser: ~1 char/token)
+        estimated_tokens = total_chars // 4
+
+        self._put(
+            event_type="llm.input_breakdown",
+            category="trace",
+            content=breakdown,
+            metadata={
+                "caller": caller,
+                "llm_call_index": call_index,
+                "total_chars": total_chars,
+                "estimated_tokens": estimated_tokens,
+            },
+        )
 
     def _put(self, *, event_type: str, category: str, content: str | dict = "", metadata: dict | None = None) -> None:
         self._buffer.append(

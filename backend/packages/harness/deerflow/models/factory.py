@@ -217,6 +217,20 @@ def create_chat_model(name: str | None = None, thinking_enabled: bool = False, *
             # display) — must never reach the provider client, which would
             # forward unknown kwargs into the completion request payload.
             "pricing",
+            # Agent-level runtime config keys from _CONTEXT_CONFIGURABLE_KEYS
+            # (services.py). These are NOT model provider parameters — they
+            # must never leak into model_kwargs and get passed to
+            # Completions.create(). Excluding them here prevents silent
+            # "unexpected keyword argument" failures when a user mistakenly
+            # places them under a model entry in config.yaml.
+            "subagent_enabled",
+            "is_plan_mode",
+            "max_concurrent_subagents",
+            "max_total_subagents",
+            "agent_name",
+            "is_bootstrap",
+            "autonomous_mode",
+            "mode",
         },
     )
     # Compute effective when_thinking_enabled by merging in the `thinking` shortcut field.

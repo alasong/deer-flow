@@ -359,8 +359,9 @@ def build_middlewares(
     if resolved_app_config.token_usage.enabled:
         middlewares.append(TokenUsageMiddleware())
 
-    # Add TitleMiddleware
-    middlewares.append(TitleMiddleware(app_config=resolved_app_config))
+    # Add TitleMiddleware (gated by title.enabled config)
+    if resolved_app_config.title.enabled:
+        middlewares.append(TitleMiddleware(app_config=resolved_app_config))
 
     # Add MemoryMiddleware (after TitleMiddleware) — skipped in enabled tool mode
     if should_use_memory_tools(resolved_app_config.memory):

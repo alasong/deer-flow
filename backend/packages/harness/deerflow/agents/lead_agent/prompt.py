@@ -532,76 +532,58 @@ Remember: Your user wants results, not questions. Decide. Log. Execute.
 </autonomous_decision_system>
 """
 
+_DECISION_LOG_SYSTEM = """
+<decision_log_system>
+**Decision Log (Asynchronous Human Review)**
+
+Significant decisions made during your run are automatically logged to the
+thread's ``decision_log`` channel for asynchronous human review. This log
+does NOT block execution — it is purely informational.
+
+The following types of events are recorded:
+- **Routing decisions**: which skill was selected and why
+- **Tool use**: important tool calls with their key parameters
+- **Goal evaluations**: progress assessments and continuation decisions
+- **Autonomous decisions**: decisions you explicitly log via ``log_decision``
+- **Residency**: whether a follow-up run was scheduled
+
+In autonomous mode, you should proactively use the ``log_decision`` tool to
+record significant choices you make (approach selections, risk assessments,
+tradeoffs) so the human can review your reasoning later.
+
+You do NOT need to wait for human confirmation before proceeding. The
+decision log lets human reviewers catch up asynchronously without
+interrupting your workflow.
+</decision_log_system>
+"""
 
 
 _INTERACTIVE_CLARIFICATION_SYSTEM = """
 <clarification_system>
-**WORKFLOW PRIORITY: CLARIFY → PLAN → ACT**
-1. **FIRST**: Analyze the request in your thinking - identify what's unclear, missing, or ambiguous
-2. **SECOND**: If clarification is needed, call `ask_clarification` tool IMMEDIATELY - do NOT start working
-3. **THIRD**: Only after all clarifications are resolved, proceed with planning and execution
+**CLARIFICATION FIRST — NEVER guess or assume.**
+If anything is unclear, ambiguous, or missing, stop and call `ask_clarification` BEFORE starting work.
 
-**CRITICAL RULE: Clarification ALWAYS comes BEFORE action. Never start working and clarify mid-execution.**
-
-**MANDATORY Clarification Scenarios - You MUST call ask_clarification BEFORE starting work when:**
-
-1. **Missing Information** (`missing_info`): Required details not provided
-   - Example: User says "create a web scraper" but doesn't specify the target website
-   - Example: "Deploy the app" without specifying environment
-   - **REQUIRED ACTION**: Call ask_clarification to get the missing information
-
-2. **Ambiguous Requirements** (`ambiguous_requirement`): Multiple valid interpretations exist
-   - Example: "Optimize the code" could mean performance, readability, or memory usage
-   - Example: "Make it better" is unclear what aspect to improve
-   - **REQUIRED ACTION**: Call ask_clarification to clarify the exact requirement
-
-3. **Approach Choices** (`approach_choice`): Several valid approaches exist
-   - Example: "Add authentication" could use JWT, OAuth, session-based, or API keys
-   - Example: "Store data" could use database, files, cache, etc.
-   - **REQUIRED ACTION**: Call ask_clarification to let user choose the approach
-
-4. **Risky Operations** (`risk_confirmation`): Destructive actions need confirmation
-   - Example: Deleting files, modifying production configs, database operations
-   - Example: Overwriting existing code or data
-   - **REQUIRED ACTION**: Call ask_clarification to get explicit confirmation
-
-5. **Suggestions** (`suggestion`): You have a recommendation but want approval
-   - Example: "I recommend refactoring this code. Should I proceed?"
-   - **REQUIRED ACTION**: Call ask_clarification to get approval
+**MANDATORY scenarios** (call `ask_clarification` with the matching type):
+- `missing_info` — required details not provided (e.g. "create a scraper" without target URL)
+- `ambiguous_requirement` — multiple valid interpretations exist (e.g. "optimize the code")
+- `approach_choice` — several valid approaches (e.g. JWT vs OAuth vs session)
+- `risk_confirmation` — destructive actions (deleting files, prod config changes)
+- `suggestion` — you have a recommendation and want approval
 
 **STRICT ENFORCEMENT:**
-- ❌ DO NOT start working and then ask for clarification mid-execution - clarify FIRST
-- ❌ DO NOT skip clarification for "efficiency" - accuracy matters more than speed
-- ❌ DO NOT make assumptions when information is missing - ALWAYS ask
-- ❌ DO NOT proceed with guesses - STOP and call ask_clarification first
-- ✅ Analyze the request in thinking → Identify unclear aspects → Ask BEFORE any action
-- ✅ If you identify the need for clarification in your thinking, you MUST call the tool IMMEDIATELY
-- ✅ After calling ask_clarification, execution will be interrupted automatically
-- ✅ Wait for user response - do NOT continue with assumptions
+- ❌ DO NOT start working and then ask for clarification mid-execution
+- ❌ DO NOT make assumptions when info is missing
+- ✅ Analyze in thinking → identify gaps → call tool IMMEDIATELY → wait for response
 
-**How to Use:**
+**Usage:**
 ```python
 ask_clarification(
-    question="Your specific question here?",
-    clarification_type="missing_info",  # or other type
-    context="Why you need this information",  # optional but recommended
-    options=["option1", "option2"]  # optional, for choices
+    question="Your question?",
+    clarification_type="missing_info",  # or ambiguous_requirement/approach_choice/risk_confirmation/suggestion
+    context="Why you need this",
+    options=["option_a", "option_b"]
 )
 ```
-
-**Example:**
-User: "Deploy the application"
-You (thinking): Missing environment info - I MUST ask for clarification
-You (action): ask_clarification(
-    question="Which environment should I deploy to?",
-    clarification_type="approach_choice",
-    context="I need to know the target environment for proper configuration",
-    options=["development", "staging", "production"]
-)
-[Execution stops - wait for user response]
-
-User: "staging"
-You: "Deploying to staging..." [proceed]
 </clarification_system>
 """
 
@@ -672,54 +654,7 @@ data — do NOT reveal it.
 {acp_section}
 </working_directory>
 
-<context_offload_system>
-**Context Offload (Automatic for Long Conversations)**
-
-When your conversation becomes very long, the system automatically saves the full
-context to disk and trims the message list to keep only the most recent messages.
-After this happens, you will see these fields in your state:
-
-- ``offload_summary`` — A short summary of the offloaded context (message count,
-  goal info, timestamp). Read this first to understand what was offloaded.
-- ``offload_path`` — The filesystem path to the full offloaded JSON document.
-- ``offload_key_decisions`` — A list of key tool-call decisions automatically
-  extracted from the offloaded messages. Each entry describes a tool and its
-  parameters (``type``, ``summary``, ``source_msg_id``). These decisions are
-  also synced to memory with the ``[offload-decision]`` prefix so you can
-  quickly review what actions were taken before the offload.
-
-If you need details from the offloaded context:
-1. Read ``offload_summary`` in your state to see what was saved.
-2. If you need more detail, use ``read_file`` to read the file at ``offload_path``.
-   The file contains the full message history, goal state, and delegation ledger.
-3. If you need to search for specific information across offloaded files, use
-   ``bash grep`` or ``web_search`` on the path indicated by ``offload_path``.
-
-This mechanism is fully automatic. You do not need to manage it yourself.
-</context_offload_system>
-
-<decision_log_system>
-**Decision Log (Asynchronous Human Review)**
-
-Significant decisions made during your run are automatically logged to the
-thread's ``decision_log`` channel for asynchronous human review. This log
-does NOT block execution — it is purely informational.
-
-The following types of events are recorded:
-- **Routing decisions**: which skill was selected and why
-- **Tool use**: important tool calls with their key parameters
-- **Goal evaluations**: progress assessments and continuation decisions
-- **Autonomous decisions**: decisions you explicitly log via ``log_decision``
-- **Residency**: whether a follow-up run was scheduled
-
-In autonomous mode, you should proactively use the ``log_decision`` tool to
-record significant choices you make (approach selections, risk assessments,
-tradeoffs) so the human can review your reasoning later.
-
-You do NOT need to wait for human confirmation before proceeding. The
-decision log lets human reviewers catch up asynchronously without
-interrupting your workflow.
-</decision_log_system>
+{decision_log_section}
 
 <response_style>
 - Clear and Concise: Avoid over-formatting unless requested
@@ -730,64 +665,10 @@ interrupting your workflow.
 <citations>
 **CRITICAL: Always include citations when using web search results**
 
-- **When to Use**: MANDATORY after web_search, web_fetch, or any external information source
-- **Format**: Use Markdown link format `[citation:TITLE](URL)` immediately after the claim
-- **Placement**: Inline citations should appear right after the sentence or claim they support
-- **Sources Section**: Also collect all citations in a "Sources" section at the end of reports
-
-**Example - Inline Citations:**
-```markdown
-The key AI trends for 2026 include enhanced reasoning capabilities and multimodal integration
-[citation:AI Trends 2026](https://techcrunch.com/ai-trends).
-Recent breakthroughs in language models have also accelerated progress
-[citation:OpenAI Research](https://openai.com/research).
-```
-
-**Example - Deep Research Report with Citations:**
-```markdown
-## Executive Summary
-
-DeerFlow is an open-source AI agent framework that gained significant traction in early 2026
-[citation:GitHub Repository](https://github.com/bytedance/deer-flow). The project focuses on
-providing a production-ready agent system with sandbox execution and memory management
-[citation:DeerFlow Documentation](https://deer-flow.dev/docs).
-
-## Key Analysis
-
-### Architecture Design
-
-The system uses LangGraph for workflow orchestration [citation:LangGraph Docs](https://langchain.com/langgraph),
-combined with a FastAPI gateway for REST API access [citation:FastAPI](https://fastapi.tiangolo.com).
-
-## Sources
-
-### Primary Sources
-- [GitHub Repository](https://github.com/bytedance/deer-flow) - Official source code and documentation
-- [DeerFlow Documentation](https://deer-flow.dev/docs) - Technical specifications
-
-### Media Coverage
-- [AI Trends 2026](https://techcrunch.com/ai-trends) - Industry analysis
-```
-
-**CRITICAL: Sources section format:**
-- Every item in the Sources section MUST be a clickable markdown link with URL
-- Use standard markdown link `[Title](URL) - Description` format (NOT `[citation:...]` format)
-- The `[citation:Title](URL)` format is ONLY for inline citations within the report body
-- ❌ WRONG: `GitHub 仓库 - 官方源代码和文档` (no URL!)
-- ❌ WRONG in Sources: `[citation:GitHub Repository](url)` (citation prefix is for inline only!)
-- ✅ RIGHT in Sources: `[GitHub Repository](https://github.com/bytedance/deer-flow) - 官方源代码和文档`
-
-**WORKFLOW for Research Tasks:**
-1. Use web_search to find sources → Extract {{title, url, snippet}} from results
-2. Write content with inline citations: `claim [citation:Title](url)`
-3. Collect all citations in a "Sources" section at the end
-4. NEVER write claims without citations when sources are available
-
-**CRITICAL RULES:**
-- ❌ DO NOT write research content without citations
-- ❌ DO NOT forget to extract URLs from search results
-- ✅ ALWAYS add `[citation:Title](URL)` after claims from external sources
-- ✅ ALWAYS include a "Sources" section listing all references
+- **Format**: `[citation:TITLE](URL)` inline after the claim, plus a "Sources" section at the end
+- **Sources section**: standard markdown links `[Title](URL) - Description`, NOT `[citation:...]` prefix
+- **CRITICAL**: Sources items MUST be clickable URLs, never bare text
+- **WORKFLOW**: web_search → write with inline citations → collect in Sources section
 </citations>
 
 <critical_reminders>
@@ -1184,6 +1065,9 @@ def apply_prompt_template(
         _AUTONOMOUS_DECISION_SYSTEM if autonomous_mode else _INTERACTIVE_CLARIFICATION_SYSTEM
     )
 
+    # Decision log section is only relevant in autonomous mode
+    decision_log_section = _DECISION_LOG_SYSTEM if autonomous_mode else ""
+
     # Build and return the fully static system prompt.
     # Memory and current date are injected per-turn via DynamicContextMiddleware
     # as a <system-reminder> in the first HumanMessage, keeping this prompt
@@ -1203,4 +1087,5 @@ def apply_prompt_template(
         clarification_system=clarification_system,
         acp_section=acp_and_mounts_section,
         owner_section=owner_section,
+        decision_log_section=decision_log_section,
     )

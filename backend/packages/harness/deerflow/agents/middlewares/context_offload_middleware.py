@@ -30,13 +30,42 @@ from typing import Any, override
 from langchain.agents import AgentState
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.summarization import count_tokens_approximately
-from langchain_core.messages import AnyMessage, RemoveMessage
+from langchain_core.messages import AnyMessage, RemoveMessage, SystemMessage
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.runtime import Runtime
 
 from deerflow.config.offload_config import OffloadConfig
 
 logger = logging.getLogger(__name__)
+
+# System prompt section injected dynamically by this middleware when context
+# offload triggers. Kept out of the base system prompt to save tokens per call.
+_CONTEXT_OFFLOAD_SYSTEM_PROMPT = """\
+<context_offload_system>
+**Context Offload (Automatic for Long Conversations)**
+
+When your conversation becomes very long, the system automatically saves the full
+context to disk and trims the message list to keep only the most recent messages.
+After this happens, you will see these fields in your state:
+
+- ``offload_summary`` — A short summary of the offloaded context (message count,
+  goal info, timestamp). Read this first to understand what was offloaded.
+- ``offload_path`` — The filesystem path to the full offloaded JSON document.
+- ``offload_key_decisions`` — A list of key tool-call decisions automatically
+  extracted from the offloaded messages. Each entry describes a tool and its
+  parameters (``type``, ``summary``, ``source_msg_id``). These decisions are
+  also synced to memory with the ``[offload-decision]`` prefix so you can
+  quickly review what actions were taken before the offload.
+
+If you need details from the offloaded context:
+1. Read ``offload_summary`` in your state to see what was saved.
+2. If you need more detail, use ``read_file`` to read the file at ``offload_path``.
+   The file contains the full message history, goal state, and delegation ledger.
+3. If you need to search for specific information across offloaded files, use
+   ``bash grep`` or ``web_search`` on the path indicated by ``offload_path``.
+
+This mechanism is fully automatic. You do not need to manage it yourself.
+</context_offload_system>"""
 
 
 def _serialize_message(msg: AnyMessage) -> dict[str, Any]:
@@ -130,7 +159,11 @@ class ContextOffloadMiddleware(AgentMiddleware):
         )
 
         return {
-            "messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *trimmed],
+            "messages": [
+                RemoveMessage(id=REMOVE_ALL_MESSAGES),
+                SystemMessage(content=_CONTEXT_OFFLOAD_SYSTEM_PROMPT),
+                *trimmed,
+            ],
             "offload_summary": summary,
             "offload_path": path,
             "offload_key_decisions": decisions,

@@ -54,12 +54,12 @@ class TestContextOffloadMiddleware:
         assert "messages" in result
         # First message should be RemoveMessage
         assert isinstance(result["messages"][0], RemoveMessage)
-        # Count real messages
+        # Count real messages (SystemMessage for offload explanation + kept tail)
         real_msgs = [m for m in result["messages"] if not isinstance(m, RemoveMessage)]
-        assert len(real_msgs) == 5  # messages_to_keep
-        # The kept messages should be the last 5 from input
+        assert len(real_msgs) == 6  # 1 offload explanation + 5 messages_to_keep
+        # The kept messages should be the last 5 from input (after the offload explanation)
         for i in range(5):
-            assert real_msgs[i].content == messages[-5 + i].content
+            assert real_msgs[i + 1].content == messages[-5 + i].content
 
     def test_offload_below_threshold(self, monkeypatch):
         """Token count below threshold returns None."""

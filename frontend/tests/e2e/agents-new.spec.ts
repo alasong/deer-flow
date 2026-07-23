@@ -22,7 +22,9 @@ test.describe("Create new agent", () => {
     // Name input
     await expect(page.getByPlaceholder(/name/i).first()).toBeVisible();
     // Continue button
-    await expect(page.getByRole("button", { name: /continue|下一步/i })).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /continue|下一步/i }),
+    ).toBeVisible();
   });
 
   test("continue button is disabled when name is empty", async ({ page }) => {
@@ -31,7 +33,9 @@ test.describe("Create new agent", () => {
     await page.goto("/workspace/agents/new");
     await page.waitForURL("**/workspace/agents/new");
 
-    await expect(page.getByRole("button", { name: /continue|下一步/i })).toBeDisabled();
+    await expect(
+      page.getByRole("button", { name: /continue|下一步/i }),
+    ).toBeDisabled();
   });
 
   test("shows error for invalid agent name characters", async ({ page }) => {
@@ -44,7 +48,9 @@ test.describe("Create new agent", () => {
     await page.getByRole("button", { name: /continue|下一步/i }).click();
 
     // Should show an error message about invalid characters
-    await expect(page.getByRole("button", { name: /continue|下一步/i })).toBeEnabled();
+    await expect(
+      page.getByRole("button", { name: /continue|下一步/i }),
+    ).toBeEnabled();
     await expect(page.locator("p.text-destructive")).toBeVisible();
   });
 
@@ -87,7 +93,9 @@ test.describe("Create new agent", () => {
     await page.getByRole("button", { name: /continue|下一步/i }).click();
 
     // After confirming name, should transition to chat step (PromptInput textarea)
-    await expect(page.getByPlaceholder(/describe|instruct|描述|指令|能力/i).first()).toBeVisible({ timeout: 10_000 });
+    await expect(
+      page.getByPlaceholder(/describe|instruct|描述|指令|能力/i).first(),
+    ).toBeVisible({ timeout: 10_000 });
   });
 
   test("back button returns to agents gallery", async ({ page }) => {

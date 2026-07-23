@@ -17,21 +17,21 @@ DeerFlow Frontend is a Next.js 16 web interface for an AI agent system. It commu
 
 ## Commands
 
-| Command          | Purpose                                           |
-| ---------------- | ------------------------------------------------- |
-| `pnpm dev`       | Dev server with Turbopack (http://localhost:3000) |
-| `pnpm build`     | Production build                                  |
-| `pnpm check`     | Lint + type check (run before committing)         |
-| `pnpm lint`      | ESLint only                                       |
-| `pnpm lint:fix`  | ESLint with auto-fix                              |
-| `pnpm format`    | Prettier check (`pnpm format:write` to apply)     |
-| `pnpm test`      | Full unit test suite with Rstest (664 tests, ~4s)      |
-| `pnpm test:watch`  | Watch mode — re-run tests on file changes                |
-| `pnpm test:changed`| Run only tests affected by recent git changes            |
-| `pnpm test:quick`  | Fail-fast mode for development (`--pool.type threads --bail 1`) |
-| `pnpm test:e2e`    | Run E2E tests with Playwright (Chromium)                 |
-| `pnpm typecheck` | TypeScript type check (`tsc --noEmit`)            |
-| `pnpm start`     | Start production server                           |
+| Command             | Purpose                                                         |
+| ------------------- | --------------------------------------------------------------- |
+| `pnpm dev`          | Dev server with Turbopack (http://localhost:3000)               |
+| `pnpm build`        | Production build                                                |
+| `pnpm check`        | Lint + type check (run before committing)                       |
+| `pnpm lint`         | ESLint only                                                     |
+| `pnpm lint:fix`     | ESLint with auto-fix                                            |
+| `pnpm format`       | Prettier check (`pnpm format:write` to apply)                   |
+| `pnpm test`         | Full unit test suite with Rstest (664 tests, ~4s)               |
+| `pnpm test:watch`   | Watch mode — re-run tests on file changes                       |
+| `pnpm test:changed` | Run only tests affected by recent git changes                   |
+| `pnpm test:quick`   | Fail-fast mode for development (`--pool.type threads --bail 1`) |
+| `pnpm test:e2e`     | Run E2E tests with Playwright (Chromium)                        |
+| `pnpm typecheck`    | TypeScript type check (`tsc --noEmit`)                          |
+| `pnpm start`        | Start production server                                         |
 
 Unit tests live under `tests/unit/` and mirror the `src/` layout (e.g., `tests/unit/core/api/stream-mode.test.ts` tests `src/core/api/stream-mode.ts`). Powered by Rstest; import source modules via the `@/` path alias.
 
@@ -41,12 +41,13 @@ E2E tests live under `tests/e2e/` and use Playwright with Chromium. They mock al
 
 项目采用两层测试策略，各有明确的职责边界：
 
-| 层 | 运行器 | 环境 | 职责 | 适合什么 |
-|---|---|---|---|---|
-| **单元测试** | Rstest | 纯 Node.js | 纯函数逻辑、数据转换、API 调用格式、静态渲染输出 | 工具函数、API client、状态机、cron 解析、`renderToStaticMarkup` 组件快照 |
-| **E2E 测试** | Playwright | 真实 Chromium | 用户交互、导航、按钮点击、表单提交、流式响应渲染 | 页面跳转、点击事件、输入验证、跨组件交互 |
+| 层           | 运行器     | 环境          | 职责                                             | 适合什么                                                                 |
+| ------------ | ---------- | ------------- | ------------------------------------------------ | ------------------------------------------------------------------------ |
+| **单元测试** | Rstest     | 纯 Node.js    | 纯函数逻辑、数据转换、API 调用格式、静态渲染输出 | 工具函数、API client、状态机、cron 解析、`renderToStaticMarkup` 组件快照 |
+| **E2E 测试** | Playwright | 真实 Chromium | 用户交互、导航、按钮点击、表单提交、流式响应渲染 | 页面跳转、点击事件、输入验证、跨组件交互                                 |
 
 **约束（不可绕过）：**
+
 - 单元测试层**不支持** DOM 环境 —— 无 `jsdom`、`happy-dom`、`@testing-library/react`。
 - 带 `useEffect`/`useState`/`useCallback` 等 hooks 的 "use client" 页面组件**不要**在单元测试中渲染（hooks 不会触发）。
 - 组件交互测试（点击、输入、表单提交）必须走 E2E 测试。
@@ -54,16 +55,19 @@ E2E tests live under `tests/e2e/` and use Playwright with Chromium. They mock al
 - 纯函数和数据逻辑直接测试，不需要 mock React hooks。
 
 **已有模式：**
+
 - `renderToStaticMarkup` + `toContain` 断言：7 个测试文件（如 `human-input-card.test.ts`）
 - `rs.mock()` / `rs.doMock("react", ...)` 模块级模拟：13 个测试文件
 - 纯 async/unit：其余 ~63 个测试文件
 - fetch mock（`rs.stubGlobal("fetch", rs.fn(...))`）用于验证请求格式，不验证后端逻辑
 
 **不推荐的做法：**
+
 - 为 "use client" 页面写单元测试验证交互行为（该走 E2E）
 - 在单元测试中验证后端 API 的业务逻辑（后端已有测试覆盖）
 
 **fetch mock 的适用判定：**
+
 - ✅ **有价值** — 测试前端如何构造请求（query params、headers、body）、如何解析响应、如何处理错误（如 `workspace-changes/api.test.ts`、`auth/server.test.ts`）
 - ❌ **低价值** — 测试 mock 返回的特定数据是否出现在组件/页面中（复制了后端测试的行为验证），应改为 E2E 测试验证真实交互
 

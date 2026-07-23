@@ -1,6 +1,11 @@
 "use client";
 
-import { BotIcon, CalendarClock, LayoutDashboard, MessagesSquare } from "lucide-react";
+import {
+  BotIcon,
+  CalendarClock,
+  LayoutDashboard,
+  MessagesSquare,
+} from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 

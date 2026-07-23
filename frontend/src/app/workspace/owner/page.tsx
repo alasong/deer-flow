@@ -4,12 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Table,
   TableBody,
@@ -205,7 +200,9 @@ export default function OwnerPage() {
 
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [expandedReasons, setExpandedReasons] = useState<Set<string>>(new Set());
+  const [expandedReasons, setExpandedReasons] = useState<Set<string>>(
+    new Set(),
+  );
 
   const toggleReason = useCallback((taskId: string) => {
     setExpandedReasons((prev) => {
@@ -219,51 +216,57 @@ export default function OwnerPage() {
     });
   }, []);
 
-  const handleApprove = useCallback(async (taskId: string) => {
-    setActionLoading(taskId);
-    setActionError(null);
-    try {
-      const res = await fetch(`/api/owner/approvals/${taskId}/approve`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ approved_by: "owner-ui" }),
-      });
-      if (!res.ok) {
-        const detail = (await res.json().catch(() => null))?.detail ?? res.statusText;
-        throw new Error(detail);
+  const handleApprove = useCallback(
+    async (taskId: string) => {
+      setActionLoading(taskId);
+      setActionError(null);
+      try {
+        const res = await fetch(`/api/owner/approvals/${taskId}/approve`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ approved_by: "owner-ui" }),
+        });
+        if (!res.ok) {
+          const detail =
+            (await res.json().catch(() => null))?.detail ?? res.statusText;
+          throw new Error(detail);
+        }
+        await approvalsQuery.refetch();
+      } catch (err) {
+        setActionError(
+          err instanceof Error ? err.message : "Failed to approve",
+        );
+      } finally {
+        setActionLoading(null);
       }
-      await approvalsQuery.refetch();
-    } catch (err) {
-      setActionError(
-        err instanceof Error ? err.message : "Failed to approve",
-      );
-    } finally {
-      setActionLoading(null);
-    }
-  }, [approvalsQuery]);
+    },
+    [approvalsQuery],
+  );
 
-  const handleReject = useCallback(async (taskId: string) => {
-    setActionLoading(taskId);
-    setActionError(null);
-    try {
-      const res = await fetch(`/api/owner/approvals/${taskId}/reject`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rejected_by: "owner-ui", reason: "" }),
-      });
-      if (!res.ok) {
-        const detail = (await res.json().catch(() => null))?.detail ?? res.statusText;
-        throw new Error(detail);
+  const handleReject = useCallback(
+    async (taskId: string) => {
+      setActionLoading(taskId);
+      setActionError(null);
+      try {
+        const res = await fetch(`/api/owner/approvals/${taskId}/reject`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rejected_by: "owner-ui", reason: "" }),
+        });
+        if (!res.ok) {
+          const detail =
+            (await res.json().catch(() => null))?.detail ?? res.statusText;
+          throw new Error(detail);
+        }
+        await approvalsQuery.refetch();
+      } catch (err) {
+        setActionError(err instanceof Error ? err.message : "Failed to reject");
+      } finally {
+        setActionLoading(null);
       }
-      await approvalsQuery.refetch();
-    } catch (err) {
-      setActionError(
-        err instanceof Error ? err.message : "Failed to reject",
-      );
-    } finally {
-      setActionLoading(null);
-    }
-  }, [approvalsQuery]);
+    },
+    [approvalsQuery],
+  );
 
   return (
     <WorkspaceContainer>
@@ -474,13 +477,12 @@ export default function OwnerPage() {
                                 <TableCell>
                                   <StatusBadge status={task.status} />
                                 </TableCell>
-                                <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                                <TableCell className="text-muted-foreground text-xs whitespace-nowrap">
                                   {formatTimestamp(task.created_at)}
                                 </TableCell>
                               </TableRow>
                             ))}
-                            {(queueQuery.data?.pending ?? []).length ===
-                              0 && (
+                            {(queueQuery.data?.pending ?? []).length === 0 && (
                               <TableRow>
                                 <TableCell
                                   colSpan={6}
@@ -626,7 +628,10 @@ export default function OwnerPage() {
                               <TableCell>
                                 <StatusBadge status={run.status} />
                                 {run.error && (
-                                  <div className="mt-0.5 max-w-[200px] truncate text-xs text-destructive" title={run.error}>
+                                  <div
+                                    className="text-destructive mt-0.5 max-w-[200px] truncate text-xs"
+                                    title={run.error}
+                                  >
                                     {run.error}
                                   </div>
                                 )}
@@ -639,7 +644,7 @@ export default function OwnerPage() {
                                   ? `${run.total_input_tokens}i/${run.total_output_tokens}o`
                                   : "—"}
                               </TableCell>
-                              <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                              <TableCell className="text-muted-foreground text-xs whitespace-nowrap">
                                 {formatTimestamp(run.created_at)}
                               </TableCell>
                             </TableRow>
@@ -748,7 +753,7 @@ export default function OwnerPage() {
                                 <TableCell>
                                   <StatusBadge status={approval.status} />
                                 </TableCell>
-                                <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                                <TableCell className="text-muted-foreground text-xs whitespace-nowrap">
                                   {formatTimestamp(approval.created_at)}
                                 </TableCell>
                                 <TableCell className="text-right">

@@ -2,6 +2,7 @@ from .clarification_tool import ask_clarification_tool
 from .log_decision_tool import log_decision_tool
 from .present_file_tool import present_file_tool
 from .review_skill_package_tool import review_skill_package
+from .rpd_tool import rpd_tool
 from .setup_agent_tool import setup_agent
 from .task_tool import task_tool
 from .update_agent_tool import update_agent
@@ -16,4 +17,5 @@ __all__ = [
     "view_image_tool",
     "task_tool",
     "log_decision_tool",
+    "rpd_tool",
 ]

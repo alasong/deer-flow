@@ -851,7 +851,10 @@ export function InputBox({
     if (disabled || polishingInput) {
       return;
     }
-    onContextChange?.({ ...context, autonomous_mode: !context.autonomous_mode });
+    onContextChange?.({
+      ...context,
+      autonomous_mode: !context.autonomous_mode,
+    });
   }, [disabled, onContextChange, context, polishingInput]);
 
   const handleReasoningEffortSelect = useCallback(
