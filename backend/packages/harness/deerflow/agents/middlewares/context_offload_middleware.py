@@ -240,8 +240,8 @@ class ContextOffloadMiddleware(AgentMiddleware):
 
         return await self._aexecute_offload(state, runtime, messages, token_count)
 
-    def _execute_offload(self, state: AgentState, runtime: Runtime, messages: list[AnyMessage], token_count: int) -> dict | None:
-        """Core offload logic shared by sync and async paths (sync portion)."""
+    def _build_offload_updates(self, state: AgentState, runtime: Runtime, messages: list[AnyMessage], token_count: int) -> dict[str, Any]:
+        """Common offload logic shared by sync and async paths."""
         thread_id = self._resolve_thread_id(runtime)
         dump = self._package_state(state, runtime)
         path = self._write_offload(dump, thread_id)
@@ -259,7 +259,7 @@ class ContextOffloadMiddleware(AgentMiddleware):
             len(trimmed),
         )
 
-        updates: dict[str, Any] = {
+        return {
             "messages": [
                 RemoveMessage(id=REMOVE_ALL_MESSAGES),
                 SystemMessage(content=_CONTEXT_OFFLOAD_SYSTEM_PROMPT),
@@ -270,7 +270,9 @@ class ContextOffloadMiddleware(AgentMiddleware):
             "offload_key_decisions": decisions,
         }
 
-        # Sync compartment extraction
+    def _execute_offload(self, state: AgentState, runtime: Runtime, messages: list[AnyMessage], token_count: int) -> dict | None:
+        """Core offload logic for the sync path."""
+        updates = self._build_offload_updates(state, runtime, messages, token_count)
         if self._model is not None and self._compartment_enabled:
             try:
                 existing = state.get("offload_compartments") or {}
@@ -279,40 +281,11 @@ class ContextOffloadMiddleware(AgentMiddleware):
                     updates["offload_compartments"] = compartments
             except Exception:
                 logger.exception("Compartment extraction failed; continuing without compartments")
-
         return updates
 
     async def _aexecute_offload(self, state: AgentState, runtime: Runtime, messages: list[AnyMessage], token_count: int) -> dict | None:
         """Core offload logic for the async path."""
-        thread_id = self._resolve_thread_id(runtime)
-        dump = self._package_state(state, runtime)
-        path = self._write_offload(dump, thread_id)
-        summary = self._build_offload_summary(dump, path)
-        trimmed = self._trim_messages(messages)
-
-        decisions = self._extract_key_decisions(messages)[:5]
-        self._sync_decisions_to_memory(decisions, runtime)
-
-        logger.info(
-            "Context offloaded to %s (%d messages, ~%d tokens, %d kept)",
-            path,
-            len(dump.get("messages", [])),
-            token_count,
-            len(trimmed),
-        )
-
-        updates: dict[str, Any] = {
-            "messages": [
-                RemoveMessage(id=REMOVE_ALL_MESSAGES),
-                SystemMessage(content=_CONTEXT_OFFLOAD_SYSTEM_PROMPT),
-                *trimmed,
-            ],
-            "offload_summary": summary,
-            "offload_path": path,
-            "offload_key_decisions": decisions,
-        }
-
-        # Async compartment extraction
+        updates = self._build_offload_updates(state, runtime, messages, token_count)
         if self._model is not None and self._compartment_enabled:
             try:
                 existing = state.get("offload_compartments") or {}
@@ -321,7 +294,6 @@ class ContextOffloadMiddleware(AgentMiddleware):
                     updates["offload_compartments"] = compartments
             except Exception:
                 logger.exception("Compartment extraction failed; continuing without compartments")
-
         return updates
 
     # ------------------------------------------------------------------

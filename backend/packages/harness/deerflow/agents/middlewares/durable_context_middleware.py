@@ -77,27 +77,27 @@ def _render_durable_context_data(summary_text: str | None, ledger: list, skills:
         comp_parts: list[str] = []
         if compartments.get("decisions"):
             comp_parts.append(
-                "### Decisions\n- " + "\n- ".join(escape(d, quote=False) for d in compartments["decisions"])
+                "### Decisions\n- " + "\n- ".join(escape(str(d), quote=False) for d in compartments["decisions"])
             )
         if compartments.get("specs"):
             comp_parts.append(
-                "### Active Specs\n- " + "\n- ".join(escape(s, quote=False) for s in compartments["specs"])
+                "### Active Specs\n- " + "\n- ".join(escape(str(s), quote=False) for s in compartments["specs"])
             )
         tp = compartments.get("task_progress", {})
-        if tp.get("goal") or tp.get("phase"):
+        if isinstance(tp, dict) and (tp.get("goal") or tp.get("phase")):
             progress_lines = []
             if tp.get("goal"):
-                progress_lines.append(f"Goal: {escape(tp['goal'], quote=False)}")
+                progress_lines.append(f"Goal: {escape(str(tp['goal']), quote=False)}")
             if tp.get("phase"):
-                progress_lines.append(f"Phase: {escape(tp['phase'], quote=False)}")
+                progress_lines.append(f"Phase: {escape(str(tp['phase']), quote=False)}")
             if tp.get("completed"):
-                progress_lines.append("Completed:\n  - " + "\n  - ".join(escape(c, quote=False) for c in tp["completed"]))
+                progress_lines.append("Completed:\n  - " + "\n  - ".join(escape(str(c), quote=False) for c in tp["completed"]))
             if tp.get("pending"):
-                progress_lines.append("Pending:\n  - " + "\n  - ".join(escape(p, quote=False) for p in tp["pending"]))
+                progress_lines.append("Pending:\n  - " + "\n  - ".join(escape(str(p), quote=False) for p in tp["pending"]))
             comp_parts.append("### Task Progress\n" + "\n".join(progress_lines))
         if compartments.get("findings"):
             comp_parts.append(
-                "### Key Findings\n- " + "\n- ".join(escape(f, quote=False) for f in compartments["findings"])
+                "### Key Findings\n- " + "\n- ".join(escape(str(f), quote=False) for f in compartments["findings"])
             )
         if comp_parts:
             data_parts.append("## Offload Compartments\n" + "\n\n".join(comp_parts))
