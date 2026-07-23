@@ -57,6 +57,7 @@ logger = logging.getLogger(__name__)
 
 _BOOTSTRAP_SKILL_NAMES = {"bootstrap"}
 _NON_INTERACTIVE_DISABLED_TOOL_NAMES = frozenset({"ask_clarification"})
+_AUTONOMOUS_MODE_DISABLED_TOOL_NAMES = frozenset({"ask_clarification"})
 
 # Channels whose inbound messages originate from untrusted external
 # commenters (anyone on a GitHub repo, etc.) and whose run context is
@@ -473,7 +474,7 @@ def make_lead_agent(config: RunnableConfig):
 def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
     # Lazy import to avoid circular dependency
     from deerflow.tools import get_available_tools
-    from deerflow.tools.builtins import setup_agent, update_agent
+    from deerflow.tools.builtins import log_decision_tool, setup_agent, update_agent
     from deerflow.tools.builtins.tool_search import assemble_deferred_tools, build_mcp_routing_middleware, get_mcp_routing_hints_prompt_section
 
     cfg = _get_runtime_config(config)
@@ -496,6 +497,7 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
     max_total_subagents = cfg.get("max_total_subagents", _default_max_total_subagents(resolved_app_config))
     is_bootstrap = cfg.get("is_bootstrap", False)
     non_interactive = bool(cfg.get("non_interactive", False))
+    autonomous_mode = bool(cfg.get("autonomous_mode", False))
     agent_name = validate_agent_name(cfg.get("agent_name"))
 
     # Register in the Owner-Agent registry so external systems and other
@@ -584,7 +586,7 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
         )
         raw_tools = get_available_tools(model_name=model_name, subagent_enabled=subagent_enabled, app_config=resolved_app_config) + [setup_agent]
         configured_tools = raw_tools
-        if non_interactive:
+        if non_interactive or autonomous_mode:
             configured_tools = [tool for tool in configured_tools if tool.name not in _NON_INTERACTIVE_DISABLED_TOOL_NAMES]
         final_tools, setup = assemble_deferred_tools(configured_tools, enabled=resolved_app_config.tool_search.enabled)
         mcp_routing_middleware = build_mcp_routing_middleware(
@@ -596,6 +598,8 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
             final_tools.append(skill_setup.describe_skill_tool)
         if should_use_memory_tools(resolved_app_config.memory):
             _append_memory_tools_without_name_conflicts(final_tools)
+        if autonomous_mode:
+            final_tools.append(log_decision_tool)
         return create_agent(
             model=create_chat_model(name=model_name, thinking_enabled=thinking_enabled, app_config=resolved_app_config, attach_tracing=False),
             tools=final_tools,
@@ -617,6 +621,7 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
                 deferred_names=setup.deferred_names,
                 user_id=resolved_user_id,
                 skill_names=skill_setup.skill_names or None,
+                autonomous_mode=autonomous_mode,
             ),
             state_schema=ThreadState,
         )
@@ -650,7 +655,7 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
     # Default lead agent (unchanged behavior)
     raw_tools = get_available_tools(model_name=model_name, groups=agent_config.tool_groups if agent_config else None, subagent_enabled=subagent_enabled, app_config=resolved_app_config)
     configured_tools = raw_tools + extra_tools
-    if non_interactive:
+    if non_interactive or autonomous_mode:
         configured_tools = [tool for tool in configured_tools if tool.name not in _NON_INTERACTIVE_DISABLED_TOOL_NAMES]
     final_tools, setup = assemble_deferred_tools(configured_tools, enabled=resolved_app_config.tool_search.enabled)
     mcp_routing_middleware = build_mcp_routing_middleware(
@@ -663,6 +668,8 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
         final_tools.append(skill_setup.describe_skill_tool)
     if should_use_memory_tools(resolved_app_config.memory):
         _append_memory_tools_without_name_conflicts(final_tools)
+    if autonomous_mode:
+        final_tools.append(log_decision_tool)
     return create_agent(
         model=create_chat_model(name=model_name, thinking_enabled=thinking_enabled, reasoning_effort=reasoning_effort, app_config=resolved_app_config, attach_tracing=False),
         tools=final_tools,
@@ -687,6 +694,7 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
             mcp_routing_hints_section=mcp_routing_hints_section,
             user_id=resolved_user_id,
             skill_names=skill_setup.skill_names or None,
+            autonomous_mode=autonomous_mode,
         ),
         state_schema=ThreadState,
     )

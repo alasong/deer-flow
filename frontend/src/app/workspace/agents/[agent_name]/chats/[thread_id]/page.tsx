@@ -90,6 +90,7 @@ export default function AgentChatPage() {
   const {
     thread,
     pendingUsageMessages,
+    currentTool,
     sendMessage,
     regenerateMessage,
     isUploading,
@@ -374,6 +375,7 @@ export default function AgentChatPage() {
                           : "ready"
                     }
                     context={settings.context}
+                    currentTool={currentTool}
                     extraHeader={
                       isWelcomeMode &&
                       !hasGoal &&

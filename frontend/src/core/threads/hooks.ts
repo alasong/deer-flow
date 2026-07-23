@@ -966,6 +966,7 @@ export function useThreadStream({
   const [isUploading, setIsUploading] = useState(false);
   // Track the thread ID that is currently streaming to handle thread changes during streaming
   const [onStreamThreadId, setOnStreamThreadId] = useState(() => threadId);
+  const [currentTool, setCurrentTool] = useState<string | null>(null);
   // Ref to track current thread ID across async callbacks without causing re-renders,
   // and to allow access to the current thread id in onUpdateEvent
   const threadIdRef = useRef<string | null>(threadId ?? null);
@@ -1044,6 +1045,7 @@ export function useThreadStream({
     assistantId: "lead_agent",
     threadId: onStreamThreadId,
     reconnectOnMount: true,
+    throttle: 16,
     fetchStateHistory: { limit: 1 },
     onCreated(meta) {
       handleStreamStart(meta.thread_id, meta.run_id);
@@ -1083,7 +1085,11 @@ export function useThreadStream({
       }
     },
     onLangChainEvent(event) {
+      if (event.event === "on_tool_start") {
+        setCurrentTool(event.name);
+      }
       if (event.event === "on_tool_end") {
+        setCurrentTool(null);
         listeners.current.onToolEnd?.({
           name: event.name,
           data: event.data,
@@ -1228,6 +1234,7 @@ export function useThreadStream({
       }
     },
     onFinish(state) {
+      setCurrentTool(null);
       listeners.current.onFinish?.(state.values);
       pendingUsageBaselineMessageIdsRef.current = new Set(
         messagesRef.current
@@ -1303,6 +1310,7 @@ export function useThreadStream({
     pendingUsageBaselineMessageIdsRef.current = new Set();
     setPendingSupersededRunIds(new Set());
     setPendingSupersededMessageIds(new Set());
+    setCurrentTool(null);
     prevHumanMsgCountRef.current =
       latestMessageCountsRef.current.humanMessageCount;
   }, [threadId]);
@@ -1530,6 +1538,7 @@ export function useThreadStream({
             context: {
               ...extraContext,
               ...context,
+              autonomous_mode: context.autonomous_mode,
               thinking_enabled: context.mode !== "flash",
               is_plan_mode: context.mode === "pro" || context.mode === "ultra",
               subagent_enabled: context.mode === "ultra",
@@ -1744,6 +1753,7 @@ export function useThreadStream({
   return {
     thread: mergedThread,
     pendingUsageMessages,
+    currentTool,
     sendMessage,
     regenerateMessage,
     isUploading,

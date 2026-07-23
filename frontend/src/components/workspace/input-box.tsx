@@ -284,6 +284,7 @@ export function InputBox({
   autoFocus,
   status = "ready",
   context,
+  currentTool,
   extraHeader,
   isWelcomeMode,
   threadId,
@@ -308,6 +309,11 @@ export function InputBox({
     reasoning_effort?: "minimal" | "low" | "medium" | "high";
   };
   extraHeader?: React.ReactNode;
+  /**
+   * Name of the currently running tool, shown as a status indicator
+   * during streaming so the UI doesn't look stuck.
+   */
+  currentTool?: string | null;
   /**
    * Whether to render the input in welcome layout (vertically centered,
    * with hero + quick action suggestions).  This is purely a visual flag,
@@ -840,6 +846,13 @@ export function InputBox({
     },
     [disabled, onContextChange, context, polishingInput, supportThinking],
   );
+
+  const handleAutonomousToggle = useCallback(() => {
+    if (disabled || polishingInput) {
+      return;
+    }
+    onContextChange?.({ ...context, autonomous_mode: !context.autonomous_mode });
+  }, [disabled, onContextChange, context, polishingInput]);
 
   const handleReasoningEffortSelect = useCallback(
     (effort: "minimal" | "low" | "medium" | "high") => {
@@ -2216,6 +2229,12 @@ export function InputBox({
             />
           )}
         </div>
+        {currentTool && status === "streaming" && (
+          <div className="text-muted-foreground flex items-center gap-1.5 px-3 pb-1 text-xs">
+            <Loader2Icon className="size-3 animate-spin" />
+            <span>Running: {currentTool}</span>
+          </div>
+        )}
         <PromptInputFooter className="flex flex-wrap gap-2 sm:flex-nowrap">
           <PromptInputTools className="min-w-0 flex-1 flex-wrap">
             {/* TODO: Add more connectors here
@@ -2564,6 +2583,22 @@ export function InputBox({
                 </PromptInputActionMenuContent>
               </PromptInputActionMenu>
             )}
+            <PromptInputButton
+              className={cn(
+                "gap-1! px-2! text-xs",
+                context.autonomous_mode
+                  ? "text-accent-foreground"
+                  : "text-muted-foreground/65",
+              )}
+              disabled={composerLocked}
+              onClick={handleAutonomousToggle}
+              data-active={context.autonomous_mode ? "" : undefined}
+            >
+              <span className="hidden sm:inline">
+                {context.autonomous_mode ? "Auto ✓" : "Auto"}
+              </span>
+              <span className="sm:hidden">A</span>
+            </PromptInputButton>
           </PromptInputTools>
           <PromptInputTools className="min-w-0 justify-end">
             <ModelSelector

@@ -324,6 +324,7 @@ class ThreadState(AgentState):
     decision_log: Annotated[list[DecisionLogEntry], merge_decision_log]
     goal_health: Annotated[list[GoalHealthEntry], merge_goal_health]
     summary_text: NotRequired[str | None]
+    autonomous_mode: NotRequired[bool | None]
     offload_summary: NotRequired[str | None]
     offload_path: NotRequired[str | None]
     offload_key_decisions: NotRequired[list[dict] | None]

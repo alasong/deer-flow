@@ -202,6 +202,7 @@ _CONTEXT_CONFIGURABLE_KEYS: frozenset[str] = frozenset(
         "max_total_subagents",
         "agent_name",
         "is_bootstrap",
+        "autonomous_mode",
     }
 )
 

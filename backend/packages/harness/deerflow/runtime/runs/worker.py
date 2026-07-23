@@ -1811,7 +1811,7 @@ def _unpack_stream_item(
 
 # ── Decision log helpers (M4) ──────────────────────────────────────────────
 
-_SIGNIFICANT_TOOL_PREFIXES = ("update_agent", "task", "skill_manage", "memory_add", "memory_update", "memory_delete")
+_SIGNIFICANT_TOOL_PREFIXES = ("update_agent", "task", "skill_manage", "memory_add", "memory_update", "memory_delete", "log_decision")
 
 
 def _extract_decision_entries(messages: list[Any], run_id: str) -> list[DecisionLogEntry]:
@@ -1882,6 +1882,10 @@ def _summarize_tool_call(name: str, args: dict) -> str:
         return "Updated memory fact"
     if name == "memory_delete":
         return "Deleted memory fact"
+    if name == "log_decision":
+        dt = args.get("decision_type", "unknown")
+        summary = (args.get("summary") or "")[:120]
+        return f"[{dt}] {summary}"
     return f"Called {name}"
 
 

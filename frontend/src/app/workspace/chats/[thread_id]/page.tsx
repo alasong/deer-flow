@@ -99,6 +99,7 @@ export default function ChatPage() {
   const {
     thread,
     pendingUsageMessages,
+    currentTool,
     sendMessage,
     regenerateMessage,
     isUploading,
@@ -388,6 +389,7 @@ export default function ChatPage() {
                             : "ready"
                       }
                       context={settings.context}
+                      currentTool={currentTool}
                       extraHeader={
                         isWelcomeMode &&
                         !hasGoal &&
