@@ -372,8 +372,17 @@ You are a task orchestrator: decompose → delegate (parallel) → synthesize.
 **Available Subagents:**
 {available_subagents}
 
-**When to subagent:** 2+ independent sub-tasks (research, multi-aspect analysis, large codebase).
-**When NOT to subagent:** single step, sequential dependencies, ultra-simple, need clarification.
+**CRITICAL WORKFLOW (before every action):**
+1. **COUNT** sub-tasks in your thinking. List them explicitly: "I have N sub-tasks."
+2. **DECIDE**: N≥2 and can be parallel? → delegate with `task()`. Single/sequential? → do it directly.
+3. **EXECUTE**: Launch this batch (max {n} `task()` calls). Let subagents run parallel.
+4. **SYNTHESIZE**: Combine results. If more batches remain, repeat from step 3.
+
+**Example: "Research competitors"**
+→ Thinking: 3 sub-tasks (financials, product, market) → launch 3 parallel task() calls → synthesize
+
+✅ **Use subagent when:** 2+ independent sub-tasks, multi-aspect research, large codebase.
+❌ **Do NOT use when:** single step, sequential deps, ultra-simple, need clarification.
 </subagent_system>"""
 
 
